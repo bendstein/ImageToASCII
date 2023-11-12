@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Driver": {
+      "commandName": "Project",
+      "commandLineArgs": "input/16.gif --_RecalculateGlyphs --FontSize 16 --TileSize 1 --NoColor- --CharWidth 2 --SSIMCoeffs 0.05,0.05,0.05 --SSIMWeights 1,1.2,2 --FlushCache- --Clamp 150, --Repeat -1"
+    }
+  }
+}
