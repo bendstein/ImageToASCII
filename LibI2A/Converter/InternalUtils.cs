@@ -1,9 +1,4 @@
 ﻿using ImageMagick;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace LibI2A.Converter;
 
@@ -16,27 +11,27 @@ public static class InternalUtils
 
     public static (uint a, double h, double s, double v) ARGBToAHSV((uint a, uint r, uint g, uint b) argb)
     {
-        (double R, double G, double B) XPVector = (argb.r / 255f, argb.g / 255f, argb.b / 255f);
-        double XPMin = Math.Min(XPVector.R, Math.Min(XPVector.G, XPVector.B));
-        double XPMax = Math.Max(XPVector.R, Math.Max(XPVector.G, XPVector.B));
+        (double R, double G, double B) = (argb.r / 255f, argb.g / 255f, argb.b / 255f);
+        double XPMin = Math.Min(R, Math.Min(G, B));
+        double XPMax = Math.Max(R, Math.Max(G, B));
         double XPD = XPMax - XPMin;
 
         (double h, double s, double v) = (0, 0, XPMax);
-        
+
         //Not greyscale, set chroma data
         if (XPD != 0)
         {
             s = XPD / XPMax;
 
-            double delta_r = (((XPMax - XPVector.R) / 6) + (XPMax / 2)) / XPMax;
-            double delta_g = (((XPMax - XPVector.G) / 6) + (XPMax / 2)) / XPMax;
-            double delta_b = (((XPMax - XPVector.B) / 6) + (XPMax / 2)) / XPMax;
+            double delta_r = (((XPMax - R) / 6) + (XPMax / 2)) / XPMax;
+            double delta_g = (((XPMax - G) / 6) + (XPMax / 2)) / XPMax;
+            double delta_b = (((XPMax - B) / 6) + (XPMax / 2)) / XPMax;
 
-            if (XPVector.R == XPMax)
+            if (R == XPMax)
                 h = delta_b - delta_g;
-            else if (XPVector.G == XPMax)
+            else if (G == XPMax)
                 h = (1f / 3f) + delta_r - delta_b;
-            else if (XPVector.B == XPMax)
+            else if (B == XPMax)
                 h = (2f / 3f) + delta_g - delta_r;
 
             if (h < 0)
@@ -50,7 +45,8 @@ public static class InternalUtils
 
     public static (uint a, uint r, uint g, uint b) AHSVToARGB((uint a, double h, double s, double v) ahsv)
     {
-        (uint a, double r, double g, double b) = (ahsv.a, 0, 0, 0);
+        uint a = ahsv.a;
+        double r, g, b;
 
         //If saturation is 0, no chroma
         if (ahsv.s == 0)
@@ -60,7 +56,7 @@ public static class InternalUtils
         else
         {
             var h = ahsv.h * 6;
-            if (h == 6) 
+            if (h == 6)
                 h = 0;
 
             var i = (int)Math.Floor(h);
@@ -105,7 +101,7 @@ public static class InternalUtils
         //Calculate luminance
         var y = COEFF_R * r_lin + COEFF_G * g_lin + COEFF_B * b_lin;
 
-        return y;
+        return y / 0xFF;
     }
 
     internal static byte ScaleUShort(ushort n)
@@ -125,10 +121,9 @@ public static class InternalUtils
         (uint a, uint r, uint g, uint b) = (ScaleUShort(pixel_color.A), ScaleUShort(pixel_color.R), ScaleUShort(pixel_color.G), ScaleUShort(pixel_color.B));
 
         Stack<IMagickImage<ushort>> prevLayersTemp = new();
-        IMagickImage<ushort>? prev_image;
 
         //If color has any transparency, combine with previous layer
-        while(a < 0xFF && previousLayers.TryPop(out prev_image))
+        while (a < 0xFF && previousLayers.TryPop(out var prev_image))
         {
             prevLayersTemp.Push(prev_image);
             var prev_pixel = prev_image.GetPixels().Where(p => p.X == pixel.X && p.Y == pixel.Y).FirstOrDefault();
@@ -148,9 +143,66 @@ public static class InternalUtils
         }
 
         //Push previous images back to stack
-        while(prevLayersTemp.TryPop(out var layer))
+        while (prevLayersTemp.TryPop(out var layer))
             previousLayers.Push(layer);
 
         return (a, r, g, b);
+    }
+
+    internal static T[] StretchArray<T>(T[] array, int new_size)
+    {
+        if (new_size <= array.Length)
+            return array;
+        else if (new_size % array.Length != 0)
+            throw new Exception($"new_size {new_size} must be an integer multiple of {array.Length}");
+
+        T[] rv = new T[new_size];
+        var factor = new_size / array.Length;
+
+        for (int i = 0, k = 0; i < array.Length; i++)
+        {
+            for (int j = 0; j < factor; j++)
+            {
+                rv[k++] = array[i];
+            }
+        }
+
+        return rv;
+    }
+
+    public static double Truncate(double d, int precision)
+    {
+        var factor = Math.Pow(10, precision);
+        return Math.Floor(d * factor) / factor;
+    }
+
+    public static double Round(double d, int precision)
+    {
+        var factor = Math.Pow(10, precision);
+        return Math.Round(d * factor) / factor;
+    }
+
+    internal static Dictionary<string, IMagickImage<ushort>> GetGlyphImages(string[] glyphs, int font_point_size, string font_face, bool invert)
+    {
+        return glyphs.ToDictionary(g => g, g =>
+        {
+            IMagickImage<ushort> glyph_image = new MagickImage(invert? MagickColors.Black : MagickColors.White, font_point_size, font_point_size)
+            {
+                ColorSpace = ColorSpace.sRGB,
+                ColorType = ColorType.TrueColor,
+                Format = MagickFormat.Jpeg
+            };
+
+            new Drawables()
+                .FontPointSize(font_point_size)
+                .Font(font_face, FontStyleType.Normal, FontWeight.Thin, FontStretch.Normal)
+                .StrokeColor(invert ? MagickColors.White : MagickColors.Black)
+                .FillColor(invert ? MagickColors.White : MagickColors.Black)
+                .Gravity(Gravity.Center)
+                .Text(0, 0, g)
+                .Draw(glyph_image);
+
+            return glyph_image;
+        });
     }
 }

@@ -1,9 +1,5 @@
 ﻿using Pastel;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace LibI2A.GlyphWriter;
 public class StreamGlyphWriter : IGlyphWriter, IDisposable
@@ -45,13 +41,29 @@ public class StreamGlyphWriter : IGlyphWriter, IDisposable
         writer = new StreamWriter(output, leaveOpen: dispose_stream_on_close);
     }
 
-    public void Write(Glyph glyph, uint? color = null)
+    public void Write(string s, uint? color = null)
     {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
+        ThrowIfDisposed();
+        writer.Write(Color(s, color));
+    }
 
+    public void WriteLine(string s, uint? color = null)
+    {
+        ThrowIfDisposed();
+        writer.WriteLine(Color(s, color));
+    }
+
+    public void WriteLine()
+    {
+        ThrowIfDisposed();
+        writer.WriteLine();
+    }
+
+    private string Color(string s, uint? color = null)
+    {
         System.Drawing.Color? c = null;
 
-        if(color != null)
+        if (color != null)
         {
             c = System.Drawing.Color.FromArgb(
                 (int)(color >> 24) & 0xFF,
@@ -60,48 +72,38 @@ public class StreamGlyphWriter : IGlyphWriter, IDisposable
                 (int)color & 0xFF);
         }
 
+        StringBuilder sb = new();
+
         for (int i = 0; i < Math.Max(1, Repeat); i++)
         {
-            string s = glyph.Symbol.ToString();
+            string cs = s;
 
-            if(ANSIEscapesEnabled && c.HasValue)
-            {
-                s = s.Pastel(c.Value);
-            }
+            if (ANSIEscapesEnabled && c.HasValue)
+                cs = cs.Pastel(c.Value);
 
-            writer.Write(s);
+            sb.Append(cs);
         }
-    }
 
-    public void Write(string s)
-    {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
-        writer.Write(s);
-    }
-
-    public void WriteLine()
-    {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
-        writer.WriteLine();
+        return sb.ToString();
     }
 
     public void Flush()
     {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
+        ThrowIfDisposed();
         writer.Flush();
     }
 
     public void Seek(int i, int j)
     {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
+        ThrowIfDisposed();
         throw new NotImplementedException();
     }
 
     public void SeekLinear(long offset)
     {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
-        
-        if(SeekLinearEnabled)
+        ThrowIfDisposed();
+
+        if (SeekLinearEnabled)
         {
             output.Seek(offset, SeekOrigin.Begin);
         }
@@ -128,5 +130,10 @@ public class StreamGlyphWriter : IGlyphWriter, IDisposable
     {
         Dispose(true);
         GC.SuppressFinalize(this);
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
     }
 }

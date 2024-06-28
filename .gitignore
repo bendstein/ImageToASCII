@@ -134,3 +134,8 @@ _NCrunch*
 .vs/
 Driver/Input/
 SqlDriver/Properties/launchSettings.json
+Driver/db/
+Driver/model/
+.editorconfig
+Driver/Training/
+Driver/Training 2/

@@ -2,7 +2,7 @@
   "profiles": {
     "Driver": {
       "commandName": "Project",
-      "commandLineArgs": "input/16.gif --_RecalculateGlyphs --FontSize 16 --TileSize 1 --NoColor- --CharWidth 2 --SSIMCoeffs 0.05,0.05,0.05 --SSIMWeights 1,1.2,2 --FlushCache- --Clamp 150, --Repeat -1"
+      "commandLineArgs": "\"C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\Training 2\" \r\n--TileSize 4\r\n--Subdivide 0\r\n--ParallelCalculate 12\r\n--nocolor\r\n--training\r\n--model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\model\\model.zip\r\n--preprocess C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\model\\preprocessed.txt\r\n--preprocessed C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\model\\preprocessed.txt"
     }
   }
 }

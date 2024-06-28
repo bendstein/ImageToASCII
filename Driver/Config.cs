@@ -1,6 +1,4 @@
-﻿using LibI2A.Converters;
-
-namespace Driver;
+﻿namespace Driver;
 
 public class Config
 {
@@ -10,27 +8,36 @@ public class Config
 
     private const int DEFAULT_TILE_SIZE = 12;
 
-    private const int DEFAULT_FONT_SIZE = 12;
-    
     private const int DEFAULT_CHAR_WIDTH = 1;
 
     private const string DEFAULT_FONT_FACE = "Consolas";
 
-    private static readonly string[] FLAG_ONLY = new string[] { nameof(RecalculateGlyphs).ToLowerInvariant() };
+    private const string DEFAULT_TRAINING_DISPLAY_DIR = "training_display";
+
+    private const string DEFAULT_DB = "i2a.db";
+
+    private static readonly string[] FLAG_ONLY = [
+        nameof(Training).ToLowerInvariant(),
+        nameof(NoColor).ToLowerInvariant(),
+        nameof(SetVT).ToLowerInvariant(),
+        nameof(FlushCache).ToLowerInvariant(),
+        nameof(WriteAll).ToLowerInvariant(),
+        nameof(InvertFont).ToLowerInvariant(),
+    ];
 
     public string Path { get; set; } = string.Empty;
 
     public string Glyphs { get; set; } = GLYPHS_DEFAULT;
 
-    public bool RecalculateGlyphs { get; set; } = false;
-
     public int TileSize { get; set; } = DEFAULT_TILE_SIZE;
-
-    public int FontSize { get; set; } = DEFAULT_FONT_SIZE;
 
     public string FontFace { get; set; } = DEFAULT_FONT_FACE;
 
+    public int SubDivide { get; set; } = 0;
+
     public bool NoColor { get; set; } = false;
+
+    public bool InvertFont { get; set; } = false;
 
     public int CharWidth { get; set; } = 1;
 
@@ -38,17 +45,35 @@ public class Config
 
     public bool FlushCache { get; set; } = false;
 
-    public (double luminance, double contrast, double structure) SSIMCoeffs { get; set; } = SSIMSettings.DEFAULT_COEFFS;
-
-    public (double luminance, double contrast, double structure) SSIMWeights { get; set; } = SSIMSettings.DEFAULT_WEIGHTS;
-
     public (int? w, int? h) Clamp { get; set; } = (null, null);
 
     public int Repeat { get; set; } = 0;
 
+    public int ParallelCalculate { get; set; } = 0;
+
     public bool WriteAll { get; set; } = false;
 
-    public Dictionary<string, string?> Arguments = new();
+    public string Output { get; set; } = string.Empty;
+
+    public bool Training { get; set; } = false;
+
+    public int TrainingParallel { get; set; } = 1;
+
+    public List<string> TrainingDirs { get; set; } = [];
+
+    public string Model { get; set; } = string.Empty;
+
+    public string TrainingDisplayDir { get; set; } = DEFAULT_TRAINING_DISPLAY_DIR;
+
+    public string DB { get; set; } = DEFAULT_DB;
+
+    public string Method { get; set; } = string.Empty;
+
+    public string Preprocess { get; set; } = string.Empty;
+
+    public string Preprocessed { get; set; } = string.Empty;
+
+    public Dictionary<string, string?> Arguments = [];
 
     public static Config ParseArgs(params string[] args)
     {
@@ -57,11 +82,11 @@ public class Config
         string? prev_arg = null;
         bool seen_arg = false;
 
-        for(int i = 0; i < args.Length; i++)
+        for (int i = 0; i < args.Length; i++)
         {
             string arg = args[i].ToLowerInvariant();
 
-            if(arg.StartsWith(ARG_PREFIX) && !arg.Equals(ARG_PREFIX))
+            if (arg.StartsWith(ARG_PREFIX) && !arg.Equals(ARG_PREFIX))
             {
                 seen_arg = true;
 
@@ -81,9 +106,9 @@ public class Config
             else
             {
                 //Handle positional args
-                if(!seen_arg)
+                if (!seen_arg)
                 {
-                    switch(i)
+                    switch (i)
                     {
                         case 0:
                             config.Arguments[nameof(Path).ToLowerInvariant()] = arg;
@@ -96,7 +121,7 @@ public class Config
                     }
                 }
                 //Value for previous arg
-                else if(prev_arg != null)
+                else if (prev_arg != null)
                 {
                     config.Arguments[prev_arg] = arg;
                 }
@@ -110,23 +135,48 @@ public class Config
             }
         }
 
-        config.Path = (config.Arguments.TryGetValue(nameof(Path).ToLowerInvariant(), out var path)? path
-            : null)?? throw new Exception($"Path is required.");
+        config.Path = (config.Arguments.TryGetValue(nameof(Path).ToLowerInvariant(), out var path) ? path
+            : null) ?? throw new Exception($"Path is required.");
+
+        config.Output = (config.Arguments.TryGetValue(nameof(Output).ToLowerInvariant(), out var output) ? output
+            : null) ?? string.Empty;
+
+        config.TrainingDisplayDir = (config.Arguments.TryGetValue(nameof(TrainingDisplayDir).ToLowerInvariant(), out var tdd) ? tdd
+            : null) ?? DEFAULT_TRAINING_DISPLAY_DIR;
 
         config.Glyphs = (config.Arguments.TryGetValue(nameof(Glyphs).ToLowerInvariant(), out var glyphs) ? glyphs
-            : null)?? GLYPHS_DEFAULT;
+            : null) ?? GLYPHS_DEFAULT;
 
-        config.RecalculateGlyphs = config.Arguments.ContainsKey(nameof(RecalculateGlyphs).ToLowerInvariant());
+        config.Model = (config.Arguments.TryGetValue(nameof(Model).ToLowerInvariant(), out var model) ? model
+            : null) ?? string.Empty;
+
+        config.Method = (config.Arguments.TryGetValue(nameof(Method).ToLowerInvariant(), out var method) ? method
+            : null) ?? string.Empty;
+
+        config.DB = (config.Arguments.TryGetValue(nameof(DB).ToLowerInvariant(), out var db) ? db
+            : null) ?? DEFAULT_DB;
+
+        config.Preprocessed = (config.Arguments.TryGetValue(nameof(Preprocessed).ToLowerInvariant(), out var ppcd) ? ppcd
+            : null) ?? string.Empty;
+
+        config.Preprocess = (config.Arguments.TryGetValue(nameof(Preprocess).ToLowerInvariant(), out var ppc) ? ppc
+               : null) ?? string.Empty;
+
+        config.Training = config.Arguments.ContainsKey(nameof(Training).ToLowerInvariant());
+
+        config.InvertFont = config.Arguments.ContainsKey(nameof(InvertFont).ToLowerInvariant());
 
         config.TileSize = int.TryParse((config.Arguments.TryGetValue(nameof(TileSize).ToLowerInvariant(), out var ts) ? ts : DEFAULT_TILE_SIZE.ToString()) ?? DEFAULT_TILE_SIZE.ToString(), out var tsi) ? tsi : 0;
 
         if (config.TileSize <= 0)
             throw new Exception($"Invalid tile size {config.TileSize}");
 
-        config.FontSize = int.TryParse((config.Arguments.TryGetValue(nameof(FontSize).ToLowerInvariant(), out var fs) ? fs : DEFAULT_FONT_SIZE.ToString()) ?? DEFAULT_FONT_SIZE.ToString(), out var fsi) ? fsi : 0;
+        config.SubDivide = int.TryParse((config.Arguments.TryGetValue(nameof(SubDivide).ToLowerInvariant(), out var sd) ? sd : 0.ToString()) ?? 0.ToString(), out var sdi) ? sdi : 0;
 
-        if (config.FontSize <= 0)
-            throw new Exception($"Invalid font size {config.FontSize}");
+        if (config.SubDivide < 0)
+            throw new Exception($"Invalid subdivision {config.SubDivide}");
+
+        config.TrainingParallel = int.TryParse((config.Arguments.TryGetValue(nameof(TrainingParallel).ToLowerInvariant(), out var tp) ? tp : 1.ToString()) ?? 1.ToString(), out var tpi) ? tpi : 1;
 
         config.FontFace = (config.Arguments.TryGetValue(nameof(FontFace).ToLowerInvariant(), out var ff) ? ff
         : null) ?? DEFAULT_FONT_FACE;
@@ -146,31 +196,7 @@ public class Config
 
         config.Repeat = int.TryParse((config.Arguments.TryGetValue(nameof(Repeat).ToLowerInvariant(), out var rp) ? rp : 0.ToString()) ?? 0.ToString(), out var rpi) ? rpi : 0;
 
-        if (config.Arguments.TryGetValue(nameof(SSIMCoeffs).ToLowerInvariant(), out var _ssimcoeffs) && _ssimcoeffs != null)
-        {
-            string[] split = _ssimcoeffs.Split(',', StringSplitOptions.TrimEntries);
-
-            if (split.Length != 3)
-                throw new Exception($"Expected 3 values for SSIM Coefficients. Got: {split.Length}");
-
-            config.SSIMCoeffs = (
-                double.TryParse(split[0], out var l)? l : throw new Exception($"Invalid luminance coefficient {split[0]}"),
-                double.TryParse(split[1], out var c)? c : throw new Exception($"Invalid contrast coefficient {split[1]}"),
-                double.TryParse(split[2], out var s)? s : throw new Exception($"Invalid strucutre coefficient {split[2]}"));
-        }
-
-        if (config.Arguments.TryGetValue(nameof(SSIMWeights).ToLowerInvariant(), out var _ssimweights) && _ssimweights != null)
-        {
-            string[] split = _ssimweights.Split(',', StringSplitOptions.TrimEntries);
-
-            if (split.Length != 3)
-                throw new Exception($"Expected 3 values for SSIM Weights. Got: {split.Length}");
-
-            config.SSIMWeights = (
-                double.TryParse(split[0], out var l) ? l : throw new Exception($"Invalid luminance weight {split[0]}"),
-                double.TryParse(split[1], out var c) ? c : throw new Exception($"Invalid contrast weight {split[1]}"),
-                double.TryParse(split[2], out var s) ? s : throw new Exception($"Invalid strucutre weight {split[2]}"));
-        }
+        config.ParallelCalculate = int.TryParse((config.Arguments.TryGetValue(nameof(ParallelCalculate).ToLowerInvariant(), out var pc) ? pc : 1.ToString()) ?? 1.ToString(), out var pci) ? pci : 1;
 
         if (config.Arguments.TryGetValue(nameof(Clamp).ToLowerInvariant(), out var _clamp) && _clamp != null)
         {
@@ -179,6 +205,13 @@ public class Config
             config.Clamp = (
                 (split.Length > 0 && int.TryParse(split[0], out var w) && w > 0) ? w : null,
                 (split.Length > 1 && int.TryParse(split[1], out var h) && h > 0) ? h : null);
+        }
+
+        if(config.Arguments.TryGetValue(nameof(TrainingDirs), out var tds))
+        {
+            config.TrainingDirs = tds!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(Directory.Exists)
+                .ToList();
         }
 
         return config;

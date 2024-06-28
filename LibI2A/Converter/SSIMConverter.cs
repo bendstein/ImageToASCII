@@ -1,677 +1,241 @@
 ﻿using ImageMagick;
-using LibI2A.Common;
-using LibI2A.Common.Extensions;
-using LibI2A.Converter;
-using LibI2A.Database;
-using Microsoft.Data.Sqlite;
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using static System.Net.Mime.MediaTypeNames;
+using LibI2A.SSIM;
+using static LibI2A.Converter.PredictionModelSSIMConverter;
 
-namespace LibI2A.Converters;
-
-/// <summary>
-/// Use the structural similarity index to find the most similar glyph to each pixel (or group of pixels),
-/// and write the resulting glyph
-/// </summary>
+namespace LibI2A.Converter;
 public class SSIMConverter : IImageToASCIIConverter
 {
-    /// <summary>
-    /// Codebook of glyphs for comparison
-    /// </summary>
-    public Glyph[] Glyphs { get; set; } = Array.Empty<Glyph>();
+    private readonly SSIMCalculator calculator;
 
-    /// <summary>
-    /// Connection to DB containing cached values
-    /// </summary>
-    public SqliteConnection Connection { get; set; }
+    private readonly ISSIMStore store;
 
-    /// <summary>
-    /// Settings to modify image conversion
-    /// </summary>
-    public SSIMSettings Settings { get; set; } = new();
+    private readonly Dictionary<string, PixelImage> glyph_images;
 
-    /// <summary>
-    /// 
-    /// </summary>
-    /// <param name="glyphs">Codebook of glyphs for comparison</param>
-    /// <param name="connection">Connection to DB containing cached values</param>
-    /// <param name="settings">Settings to modify image conversion</param>
-    public SSIMConverter(Glyph[] glyphs, SqliteConnection connection, SSIMSettings? settings = null)
+    private readonly Options options;
+
+    public SSIMConverter(ISSIMStore store, Action<Options>? configure = null)
     {
-        Glyphs = glyphs;
-        Connection = connection;
-        Settings = settings ?? new();
+        this.store = store;
+        Options options = new();
+        configure?.Invoke(options);
+        this.options = options;
+        glyph_images = InternalUtils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
+            .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
+        calculator = new SSIMCalculator(store, this.options.SSIMCalculatorOptions);
     }
 
-    public void ConvertImage(Stream input, Stream output, 
-        Func<string, uint, string>? before_write = null, Action<string, uint>? after_write = null)
+    public SSIMConverter(ISSIMStore store, Options options)
     {
-        MagickImageCollection images = new(input);
-
-        var supports_multiframe = images.FirstOrDefault()?.FormatInfo?.SupportsMultipleFrames?? false;
-
-        long position = output.CanSeek? output.Position : 0;
-
-        using var sw = new StreamWriter(output);
-
-        Dictionary<SSIM, Glyph> cache = new();
-
-        int repeat_count = 0;
-        int repeat = supports_multiframe && images.Count > 1? Settings.Repeat : 0;
-
-        var previous = new string[images.Count];
-
-        //If animation isn't supported, and this has multiple images, treat as layers. Render only the top layer,
-        //coalescing to lower layers when there is any transparency
-        Stack<IMagickImage<ushort>> image_stack = new();
-        if(images.Count > 1 && !supports_multiframe)
-        {
-            for(int i = 0; i < images.Count - 1; i++)
-            {
-                var image = images[i];
-                image_stack.Push(image);
-            }
-            images = new(new IMagickImage<ushort>[] { images.Last() });
-        }
-
-        while (repeat < 0 || repeat_count <= repeat)
-        {
-            int ndx = 0;
-
-            foreach (var image in images)
-            {
-                try
-                {
-                    StringBuilder sb = new();
-
-                    //Delay between frames
-                    if (images.Count > 1 && image.AnimationDelay > 0)
-                        Thread.Sleep(image.AnimationDelay * 10);
-
-                    //On next frame, return to start position
-                    if (output.CanSeek)
-                    {
-                        output.Seek(position, SeekOrigin.Begin);
-                    }
-                    //If not seekable, and ANSI escape sequences are enabled, write sequence to return to start
-                    else if (Settings.AllowANSIEscapes)
-                    {
-                        sw.Write($"\x1b[{image.Page.X};{image.Page.Y}H");
-                        sw.Flush();
-                    }
-                    //Otherwise, leave a line of padding
-                    else if (ndx > 0)
-                    {
-                        sw.WriteLine();
-                        sw.Flush();
-                    }
-
-                    if (repeat_count > 0 && !string.IsNullOrEmpty(previous[ndx]))
-                    {
-                        sw.Write(previous[ndx++]);
-                        sw.Flush();
-                        continue;
-                    }
-
-                    switch (image.Format)
-                    {
-                        case MagickFormat.Jpeg:
-                        case MagickFormat.Jpg:
-                            image.Quality = 50;
-                            break;
-                    }
-
-                    image.SetBitDepth(8);
-
-                    if (Settings.Clamp.w != null || Settings.Clamp.h != null)
-                    {
-                        if (Settings.Clamp.h.HasValue && Settings.Clamp.h.Value < image.Height && Settings.Clamp.h.Value > 0)
-                            image.Resize(0, Settings.Clamp.h.Value);
-                        if (Settings.Clamp.w.HasValue && Settings.Clamp.w.Value < image.Width && Settings.Clamp.w.Value > 0)
-                            image.Resize(Settings.Clamp.w.Value, 0);
-                    }
-
-                    var image_ssim_values = SSIMUtils.CalculateSSIMValues(image, image_stack, Settings.Window.w, Settings.Window.h)
-                        .Select(pair =>
-                        {
-                            var tile = pair.tile;
-                            var values = pair.values;
-
-                            if (Settings.Precision >= 0)
-                            {
-                                values.MeanLuminance = Utils.Truncate(values.MeanLuminance, Settings.Precision);
-                                values.StdDevLuminance = Utils.Truncate(values.StdDevLuminance, Settings.Precision);
-                                for (int i = 0; i < values.Luminances.Length; i++)
-                                {
-                                    var luminance = values.Luminances[i];
-                                    if (luminance != null)
-                                        values.Luminances[i] = Utils.Truncate(luminance.Value, Settings.Precision);
-                                }
-                            }
-
-                            return (tile, values);
-                        });
-
-                    int i = 0;
-
-                    var bits = (int)Math.Ceiling(Math.Pow(2, image.DetermineBitDepth()));
-
-                    foreach (var tile in image_ssim_values)
-                    {
-                        Glyph glyph = new();
-                        Thread getGlyph = new(() =>
-                        {
-                            if (!cache.TryGetValue(tile.values, out glyph))
-                            {
-                                //If not in cache dictionary, check db
-                                if (DBUtils.TryGetMemoizedGlpyh(Connection,
-                                    tile.values.Luminances,
-                                    Settings.Window,
-                                    bits,
-                                    Settings.coeffs,
-                                    Settings.weights,
-                                    out var glyph_string) && !string.IsNullOrWhiteSpace(glyph_string))
-                                {
-                                    glyph.Symbol = glyph_string[0];
-                                    cache[tile.values] = glyph;
-                                }
-                                else
-                                {
-                                    //Not cached, calculate and add to cache
-                                    SemaphoreSlim mutex = new(1, 1);
-                                    List<(Glyph g, SSIMComparison c)> comparisons = new();
-
-                                    const int THREAD_COUNT = 8;
-                                    List<Thread> current_threads = new();
-
-                                    void JoinThreads()
-                                    {
-                                        foreach (var thread in current_threads)
-                                            thread.Join();
-                                        current_threads.Clear();
-                                    }
-
-                                    foreach (var g in Glyphs)
-                                    {
-                                        Thread compare = new(() =>
-                                        {
-                                            var value = SSIMUtils.CompareSSIMs(tile.values, g.SSIM!.Value,
-                                                Settings.coeffs,
-                                                Settings.weights,
-                                                bits);
-
-                                            mutex.Wait();
-
-                                            try
-                                            {
-                                                comparisons.Add((g, value));
-                                            }
-                                            finally
-                                            {
-                                                mutex.Release();
-                                            }
-                                        });
-                                        compare.Start();
-
-                                        current_threads.Add(compare);
-
-                                        if (current_threads.Count >= THREAD_COUNT)
-                                            JoinThreads();
-                                    }
-
-                                    if (current_threads.Any())
-                                        JoinThreads();
-
-                                    glyph = comparisons.MaxBy(c => c.c.Index).g;
-
-                                    //Add glyph to dictionary and db
-                                    cache[tile.values] = glyph;
-
-                                    DBUtils.WriteMemoizedGlyph(Connection,
-                                        tile.values.Luminances,
-                                        Settings.Window,
-                                        bits,
-                                        Settings.coeffs,
-                                        Settings.weights,
-                                        glyph.Symbol.ToString());
-                                }
-                            }
-                        });
-
-                        getGlyph.Start();
-
-                        (uint a_avg, double h_avg, double s_avg, double v_avg) = (0, 0d, 0d, 0d);
-
-                        foreach (var pixel in tile.tile)
-                        {
-                            var color = pixel?.ToColor();
-                            if (color != null)
-                            {
-                                (uint a, uint r, uint g, uint b) argb;
-
-                                //Coalesce transparency
-                                if (color.A < ushort.MaxValue && image_stack.Any())
-                                {
-                                    argb = InternalUtils.CoalescePixel(pixel!, image_stack);
-                                }
-                                else
-                                {
-                                    argb = (
-                                       InternalUtils.ScaleUShort(color.A),
-                                       InternalUtils.ScaleUShort(color.R),
-                                       InternalUtils.ScaleUShort(color.G),
-                                       InternalUtils.ScaleUShort(color.B));
-                                }
-
-                                (uint a, double h, double s, double v) ahsv = InternalUtils.ARGBToAHSV(argb);
-                                a_avg += ahsv.a;
-                                h_avg += ahsv.h;
-                                s_avg += ahsv.s;
-                                v_avg += ahsv.v;
-                            }
-                        }
-
-                        a_avg /= (uint)tile.tile.Count();
-                        h_avg /= (uint)tile.tile.Count();
-                        s_avg /= (uint)tile.tile.Count();
-                        v_avg /= (uint)tile.tile.Count();
-
-                        (a_avg, uint r_avg, uint g_avg, uint b_avg) = InternalUtils.AHSVToARGB((a_avg, h_avg, s_avg, v_avg));
-
-                        var avg_color = InternalUtils.ToUInt((a_avg, r_avg, g_avg, b_avg));
-
-                        //avg_color /= (uint)tile.tile.Count();
-
-                        getGlyph.Join();
-
-                        string s = glyph.Symbol.ToString();
-
-                        if (before_write != null)
-                            s = before_write(s, avg_color);
-
-                        sb.Append(s);
-
-                        if (!Settings.WriteAll)
-                        {
-                            sw.Write(s);
-                        }
-
-                        i += Settings.Window.w;
-                        if (i >= image.Width)
-                        {
-                            i = 0;
-
-                            sb.AppendLine();
-
-                            if (!Settings.WriteAll)
-                            {
-                                sw.WriteLine();
-                                output.Flush();
-                            }
-                        }
-
-                        if (after_write != null)
-                            after_write(s, avg_color);
-                    }
-
-                    previous[ndx++] = sb.ToString();
-
-                    if (Settings.WriteAll)
-                    {
-                        sw.Write(sb.ToString());
-                        sw.Flush();
-                    }
-                }
-                finally
-                {
-                    image_stack.Push(image);
-                }
-            }
-
-            sw.Flush();
-
-            repeat_count++;
-        }
+        this.store = store;
+        this.options = options;
+        glyph_images = InternalUtils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
+            .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
+        calculator = new SSIMCalculator(store, this.options.SSIMCalculatorOptions);
     }
 
-    public void ConvertImage2(Stream input, IGlyphWriter writer)
+    public IEnumerable<(string glyph, uint? color)> ConvertImage(Stream input)
     {
-        MagickImageCollection images = new(input);
+        using var image_collection = new MagickImageCollection(input);
+        image_collection.Coalesce();
+        var image = image_collection.First();
 
-        var supports_multiframe = images.FirstOrDefault()?.FormatInfo?.SupportsMultipleFrames ?? false;
+        //Break images into windows
+        var pixel_image = new PixelImage(image);
 
-        Dictionary<SSIM, Glyph> cache = new();
+        int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
+        int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
 
-        int repeat_count = 0;
-        int repeat = supports_multiframe && images.Count > 1 ? Settings.Repeat : 0;
+        int n = 0;
 
-        var previous = new string[images.Count];
-
-        //If animation isn't supported, and this has multiple images, treat as layers. Render only the top layer,
-        //coalescing to lower layers when there is any transparency
-        Stack<IMagickImage<ushort>> image_stack = new();
-        if (images.Count > 1 && !supports_multiframe)
+        foreach (var tile in pixel_image.Tiles(options.FontSize, options.FontSize))
         {
-            for (int i = 0; i < images.Count - 1; i++)
+            if (n > 0 && (n % width) == 0)
+                yield return (Environment.NewLine, null);
+
+            //Get average color of tile
+            var colors = tile.Pixels
+                .Where(color => color != null)
+                .Select(color => InternalUtils.ARGBToAHSV((
+                    InternalUtils.ScaleUShort(color!.A),
+                    InternalUtils.ScaleUShort(color.R),
+                    InternalUtils.ScaleUShort(color.G),
+                    InternalUtils.ScaleUShort(color.B))))
+                .ToList();
+
+            uint combined = 0;
+
+            if(colors.Count > 0)
             {
-                var image = images[i];
-                image_stack.Push(image);
-            }
-            images = new(new IMagickImage<ushort>[] { images.Last() });
-        }
-
-        while (repeat < 0 || repeat_count <= repeat)
-        {
-            int ndx = 0;
-
-            foreach (var image in images)
-            {
-                try
-                {
-                    StringBuilder sb = new();
-
-                    //Delay between frames
-                    if (images.Count > 1 && image.AnimationDelay > 0)
-                        Thread.Sleep(image.AnimationDelay * 10);
-
-                    //If seeking is enabled, jump to position, otherwise write in a line of padding
-                    if(writer.SeekEnabled)
-                    {
-                        writer.Seek(image.Page.X, image.Page.Y);
-                    }
-                    else if(writer.SeekLinearEnabled)
-                    {
-
-                    }
-                    else
-                    {
-                        writer.WriteLine();
-                        writer.Flush();
-                    }
-
-                    if (repeat_count > 0 && !string.IsNullOrEmpty(previous[ndx]))
-                    {
-                        writer.Write(previous[ndx++]);
-                        continue;
-                    }
-
-                    switch (image.Format)
-                    {
-                        case MagickFormat.Jpeg:
-                        case MagickFormat.Jpg:
-                            image.Quality = 50;
-                            break;
-                    }
-
-                    image.SetBitDepth(8);
-
-                    if (Settings.Clamp.w != null || Settings.Clamp.h != null)
-                    {
-                        if (Settings.Clamp.h.HasValue && Settings.Clamp.h.Value < image.Height && Settings.Clamp.h.Value > 0)
-                            image.Resize(0, Settings.Clamp.h.Value);
-                        if (Settings.Clamp.w.HasValue && Settings.Clamp.w.Value < image.Width && Settings.Clamp.w.Value > 0)
-                            image.Resize(Settings.Clamp.w.Value, 0);
-                    }
-
-                    var image_ssim_values = SSIMUtils.CalculateSSIMValues(image, image_stack, Settings.Window.w, Settings.Window.h)
-                        .Select(pair =>
-                        {
-                            var tile = pair.tile;
-                            var values = pair.values;
-
-                            if (Settings.Precision >= 0)
-                            {
-                                values.MeanLuminance = Utils.Truncate(values.MeanLuminance, Settings.Precision);
-                                values.StdDevLuminance = Utils.Truncate(values.StdDevLuminance, Settings.Precision);
-                                for (int i = 0; i < values.Luminances.Length; i++)
-                                {
-                                    var luminance = values.Luminances[i];
-                                    if (luminance != null)
-                                        values.Luminances[i] = Utils.Truncate(luminance.Value, Settings.Precision);
-                                }
-                            }
-
-                            return (tile, values);
-                        });
-
-                    int i = 0;
-
-                    var bits = (int)Math.Ceiling(Math.Pow(2, image.DetermineBitDepth()));
-
-                    foreach (var tile in image_ssim_values)
-                    {
-                        Glyph glyph = new();
-                        Thread getGlyph = new(() =>
-                        {
-                            if (!cache.TryGetValue(tile.values, out glyph))
-                            {
-                                //If not in cache dictionary, check db
-                                if (DBUtils.TryGetMemoizedGlpyh(Connection,
-                                    tile.values.Luminances,
-                                    Settings.Window,
-                                    bits,
-                                    Settings.coeffs,
-                                    Settings.weights,
-                                    out var glyph_string) && !string.IsNullOrWhiteSpace(glyph_string))
-                                {
-                                    glyph.Symbol = glyph_string[0];
-                                    cache[tile.values] = glyph;
-                                }
-                                else
-                                {
-                                    //Not cached, calculate and add to cache
-                                    SemaphoreSlim mutex = new(1, 1);
-                                    List<(Glyph g, SSIMComparison c)> comparisons = new();
-
-                                    const int THREAD_COUNT = 8;
-                                    List<Thread> current_threads = new();
-
-                                    void JoinThreads()
-                                    {
-                                        foreach (var thread in current_threads)
-                                            thread.Join();
-                                        current_threads.Clear();
-                                    }
-
-                                    foreach (var g in Glyphs)
-                                    {
-                                        Thread compare = new(() =>
-                                        {
-                                            var value = SSIMUtils.CompareSSIMs(tile.values, g.SSIM!.Value,
-                                                Settings.coeffs,
-                                                Settings.weights,
-                                                bits);
-
-                                            mutex.Wait();
-
-                                            try
-                                            {
-                                                comparisons.Add((g, value));
-                                            }
-                                            finally
-                                            {
-                                                mutex.Release();
-                                            }
-                                        });
-                                        compare.Start();
-
-                                        current_threads.Add(compare);
-
-                                        if (current_threads.Count >= THREAD_COUNT)
-                                            JoinThreads();
-                                    }
-
-                                    if (current_threads.Any())
-                                        JoinThreads();
-
-                                    glyph = comparisons.MaxBy(c => c.c.Index).g;
-
-                                    //Add glyph to dictionary and db
-                                    cache[tile.values] = glyph;
-
-                                    DBUtils.WriteMemoizedGlyph(Connection,
-                                        tile.values.Luminances,
-                                        Settings.Window,
-                                        bits,
-                                        Settings.coeffs,
-                                        Settings.weights,
-                                        glyph.Symbol.ToString());
-                                }
-                            }
-                        });
-
-                        getGlyph.Start();
-
-                        (uint a_avg, double h_avg, double s_avg, double v_avg) = (0, 0d, 0d, 0d);
-
-                        foreach (var pixel in tile.tile)
-                        {
-                            var color = pixel?.ToColor();
-                            if (color != null)
-                            {
-                                (uint a, uint r, uint g, uint b) argb;
-
-                                //Coalesce transparency
-                                if (color.A < ushort.MaxValue && image_stack.Any())
-                                {
-                                    argb = InternalUtils.CoalescePixel(pixel!, image_stack);
-                                }
-                                else
-                                {
-                                    argb = (
-                                       InternalUtils.ScaleUShort(color.A),
-                                       InternalUtils.ScaleUShort(color.R),
-                                       InternalUtils.ScaleUShort(color.G),
-                                       InternalUtils.ScaleUShort(color.B));
-                                }
-
-                                (uint a, double h, double s, double v) ahsv = InternalUtils.ARGBToAHSV(argb);
-                                a_avg += ahsv.a;
-                                h_avg += ahsv.h;
-                                s_avg += ahsv.s;
-                                v_avg += ahsv.v;
-                            }
-                        }
-
-                        a_avg /= (uint)tile.tile.Count();
-                        h_avg /= (uint)tile.tile.Count();
-                        s_avg /= (uint)tile.tile.Count();
-                        v_avg /= (uint)tile.tile.Count();
-
-                        (a_avg, uint r_avg, uint g_avg, uint b_avg) = InternalUtils.AHSVToARGB((a_avg, h_avg, s_avg, v_avg));
-
-                        var avg_color = InternalUtils.ToUInt((a_avg, r_avg, g_avg, b_avg));
-
-                        //avg_color /= (uint)tile.tile.Count();
-
-                        getGlyph.Join();
-
-                        string s = glyph.Symbol.ToString();
-
-                        if (before_write != null)
-                            s = before_write(s, avg_color);
-
-                        sb.Append(s);
-
-                        if (!Settings.WriteAll)
-                        {
-                            sw.Write(s);
-                        }
-
-                        i += Settings.Window.w;
-                        if (i >= image.Width)
-                        {
-                            i = 0;
-
-                            sb.AppendLine();
-
-                            if (!Settings.WriteAll)
-                            {
-                                sw.WriteLine();
-                                output.Flush();
-                            }
-                        }
-
-                        if (after_write != null)
-                            after_write(s, avg_color);
-                    }
-
-                    previous[ndx++] = sb.ToString();
-
-                    if (Settings.WriteAll)
-                    {
-                        sw.Write(sb.ToString());
-                        sw.Flush();
-                    }
-                }
-                finally
-                {
-                    image_stack.Push(image);
-                }
+                var sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
+                var avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
+                    sums.h / colors.Count,
+                    sums.s / colors.Count,
+                    sums.v / colors.Count);
+                combined = InternalUtils.ToUInt(InternalUtils.AHSVToARGB(avgs));
             }
 
-            sw.Flush();
+            //Get glyph that is most structurally similar to this tile
+            var glyph = store.GetOrCalculateAndStoreSoln([..tile.Intensities],
+                () =>
+                {
+                    SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
+                    (string key, double score) max = (string.Empty, double.MinValue); 
+                    var lk = new { };
 
-            repeat_count++;
+                    List<Thread> threads = glyph_images.Select(img => new Thread(() =>
+                    {
+                        try
+                        {
+                            var score = calculator.Calculate(tile, img.Value);
+
+                            //If better than current max, record
+                            lock(lk)
+                                if (score > max.score)
+                                    max = (img.Key, score);
+                        }
+                        finally
+                        {
+                            mutex.Release();
+                        }
+                    })).ToList();
+
+                    //Calculate in parallel
+                    foreach(var thread in threads)
+                    {
+                        mutex.Wait();
+                        thread.Start();
+                    }
+
+                    //Wait for all threads to complete
+                    foreach(var thread in threads)
+                        thread.Join();
+
+                    //Return maximum
+                    return max.key;
+                });
+
+            yield return (glyph, combined);
+            n++;
         }
+
+        yield break;
     }
-}
 
-/// <summary>
-/// Settings to modify execution of <see cref="SSIMConverter"/>
-/// </summary>
-public class SSIMSettings 
-{
-    public static readonly (double, double, double) DEFAULT_COEFFS = (0.5d, 0.5d, 0.5d);
+    public IEnumerable<(float[] intensities, float ssim, string glyph)> PreprocessImage(Stream input)
+    {
+        using var image_collection = new MagickImageCollection(input);
+        image_collection.Coalesce();
+        var image = image_collection.First();
 
-    public static readonly (double, double, double) DEFAULT_WEIGHTS = (0.8d, 2d, 3d);
+        //Break images into windows
+        var pixel_image = new PixelImage(image);
 
-    /// <summary>
-    /// The width/height of a rectangle of pixels that should be compared to each glyph
-    /// </summary>
-    public (int w, int h) Window { get; set; } = (1, 1);
+        int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
+        int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
 
-    /// <summary>
-    /// Truncate floats in the SSIM calculation to this precision. A lower precision may
-    /// decrease accuracy, but could improve performance due to dynamic programming
-    /// </summary>
-    public int Precision { get; set; } = 5;
+        var tiles = pixel_image.Tiles(options.FontSize, options.FontSize).GetEnumerator();
 
-    /// <summary>
-    /// Modifiers to apply to each constant K, where K is a small value used to mitigate fluctuations in near-zero
-    /// values
-    /// </summary>
-    public (double luminance, double contrast, double structure) coeffs { get; set; } = DEFAULT_COEFFS;
+        for (int n = 0; tiles.MoveNext(); n++)
+        {
+            var tile = tiles.Current;
 
-    /// <summary>
-    /// Exponential weights to apply to each value in the SSIM index to account for different levels of
-    /// importance for each value
-    /// </summary>
-    public (double luminance, double contrast, double structure) weights { get; set; } = DEFAULT_WEIGHTS;
+            //Line break in console
+            if (n > 0 && (n % width) == 0)
+                Console.WriteLine();
 
-    /// <summary>
-    /// If specified, clamp image to these dimensions
-    /// </summary>
-    public (int? w, int? h) Clamp { get; set; } = (null, null);
+            //Get glyphs that are most structurally similar to this tile
+            (string primary, Dictionary<string, float> similar) getGlyphs(Dictionary<string, PixelImage> glyphs)
+            {
+                SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
+                Dictionary<string, float> scores = [];
+                (string key, float value) max = (string.Empty, float.MinValue);
 
-    /// <summary>
-    /// Whether ANSI escape sequences are supported
-    /// </summary>
-    public bool AllowANSIEscapes { get; set; } = false;
+                //Find the glyph(s) that are most similar to this tile
+                List<Thread> threads = glyphs.Select(img => new Thread(() =>
+                {
+                    try
+                    {
+                        var score = (float)double.Clamp(calculator.Calculate(tile, img.Value), float.MinValue, float.MaxValue);
 
-    /// <summary>
-    /// The number of times to repeat an animation; -1 indicates forever
-    /// </summary>
-    public int Repeat { get; set; } = 0;
+                        lock (scores)
+                        {
+                            //If better than current max, record as max
+                            if (score > max.value)
+                                max = (img.Key, score);
 
-    /// <summary>
-    /// If true, instead of writing to the stream glyph-by-glyph, will
-    /// write image all at once
-    /// </summary>
-    public bool WriteAll { get; set; } = false;
+                            //Record score
+                            scores[img.Key] = score;
+                        }
+                    }
+                    finally
+                    {
+                        mutex.Release();
+                    }
+                })).ToList();
+
+                //Calculate in parallel
+                foreach (var thread in threads)
+                {
+                    mutex.Wait();
+                    thread.Start();
+                }
+
+                //Wait for all threads to complete
+                foreach (var thread in threads)
+                    thread.Join();
+
+                //Return all glyphs within 5% of the maximum
+                const float ERR = 0.05f;
+
+                var matching = scores.Where(pair => (Math.Abs(pair.Value - max.value) / max.value) < ERR).ToDictionary();
+
+                //Return maximum
+                return (max.key, matching);
+            }
+
+            (var glyph, var glyphs) = getGlyphs(glyph_images);
+            //(var inv_glyph, var inv_glyphs) = getGlyphs(glyph_images_inv);
+
+            var intensities = tile.Intensities.Select(it => (float)double.Clamp(it, float.MinValue, float.MaxValue));
+
+            //Print random matching glyph to the console
+            if (glyphs.Count > 0)
+                Console.Write(glyphs.Keys.OrderBy(k => Random.Shared.Next()).First());
+            else
+                Console.Write(' ');
+
+            foreach (var g in glyphs)
+                yield return (intensities.ToArray(), g.Value, g.Key);
+        }
+
+        Console.WriteLine();
+        yield break;
+    }
+
+    public class Options
+    {
+        public int Subdivide { get; set; } = 1;
+
+        public (double K1, double K2) Constants = (0.01d, 0.03d);
+
+        public double GaussianStdDev { get; set; } = 1.5d;
+
+        public int FontSize { get; set; } = 12;
+
+        public string FontFace { get; set; } = string.Empty;
+
+        public bool InvertFont { get; set; } = false;
+
+        public int ParallelCalculate { get; set; } = 1;
+
+        public IEnumerable<string> Glyphs { get; set; } = [];
+
+        public SSIMCalculator.Options SSIMCalculatorOptions
+            => new()
+            {
+                Subdivide = Subdivide,
+                Constants = Constants,
+                GaussianStdDev = GaussianStdDev
+            };
+    }
 }

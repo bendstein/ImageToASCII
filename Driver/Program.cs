@@ -1,43 +1,38 @@
 ﻿using Driver;
-using ImageMagick;
 using LibI2A;
 using LibI2A.Common;
-using LibI2A.Converters;
-using LibI2A.Database;
+using LibI2A.Converter;
+using LibI2A.SSIM;
 using Microsoft.Data.Sqlite;
+using Microsoft.ML;
 using Pastel;
-using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 
 try
 {
-    //Initialize database
-    const string DB = "i2a.db";
-    bool init = File.Exists(DB);
-
-    using var connection = new SqliteConnection($"Data Source={DB}");
-
-    connection.Open();
-
-    if(!init)
-        DBUtils.Initialize(connection);
-
     var config = Config.ParseArgs(args);
 
-    //If specified, flush pixel-glyph memo
-    if (config.FlushCache)
-        DBUtils.FlushMemoizedGlyphs(connection);
+    ////Initialize database
+    //bool init = File.Exists(config.DB);
+
+    //using var connection = new SqliteConnection($"Data Source={config.DB}");
+
+    //connection.Open();
 
     //Make sure the image exists
-    if (!File.Exists(config.Path))
-        throw new Exception($"Image not found at '{config.Path}'.");
+    if(!config.Training)
+    {
+        if (!File.Exists(config.Path))
+            throw new Exception($"Image not found at '{config.Path}'.");
+    }
 
     //Make sure the glyphs file exists
-    if(!File.Exists(config.Glyphs))
+    if (!File.Exists(config.Glyphs))
         throw new Exception($"Glyphs file not found at '{config.Glyphs}'.");
 
     //Set VT if specified
-    if(config.SetVT)
+    if (config.SetVT)
     {
         try
         {
@@ -47,81 +42,266 @@ try
     }
 
     //Read glyphs file
-    Glyph[] glyphs;
+    string[] glyphs;
 
-    using(var fs = new FileStream(config.Glyphs, FileMode.Open, FileAccess.Read))
+    await using (var fs = new FileStream(config.Glyphs, FileMode.Open, FileAccess.Read))
         glyphs = Utils.ReadGlyphsFile(fs);
-
-    //Read glyph SSIM data
-    glyphs = DBUtils.ReadGlyphData(connection, config.FontSize, config.FontFace, glyphs);
-
-    //If any glyphs missing SSIM data (or if explicitly configured in the args), calculate
-    var glyphs_wo_ssim = config.RecalculateGlyphs? glyphs : glyphs.Where(s => !s.SSIM.HasValue);
-
-    if(glyphs_wo_ssim.Any())
-    {
-        var calculated = SSIMUtils.CalculateGlyphSSIMValues(glyphs_wo_ssim.ToArray(), config.FontSize, config.FontFace);
-        glyphs = (config.RecalculateGlyphs ? calculated : glyphs.Where(s => s.SSIM.HasValue).Union(calculated)).ToArray();
-
-        //Write updated glyph ssim data
-        DBUtils.WriteGlyphData(connection, config.FontSize, config.FontFace, calculated);
-
-        ////Write updated glyphs to file
-        //using(var fs = new FileStream(config.Glyphs, FileMode.Open, FileAccess.Write))
-        //{
-        //    fs.Position = 0;
-        //    Utils.WriteGlyphsFile(glyphs, fs);
-        //    fs.SetLength(fs.Position);
-        //}
-    }
 
     if (glyphs.Length == 0)
         throw new Exception($"No glyphs were present.");
 
-    //Convert image to string
-    IImageToASCIIConverter converter = new SSIMConverter(glyphs, connection, new()
+    string output_file = config.Output;
+
+    if(!config.Training && !string.IsNullOrWhiteSpace(output_file))
     {
-        Window = new(config.TileSize, config.TileSize),
-        Precision = 2,
-        coeffs = config.SSIMCoeffs,
-        weights = config.SSIMWeights,
-        Clamp = config.Clamp,
-        AllowANSIEscapes = true,
-        Repeat = config.Repeat,
-        WriteAll = config.WriteAll
-    });
+        string dir = Path.GetDirectoryName(output_file)?? string.Empty;
 
-    using var stream = Console.OpenStandardOutput();
+        if(!Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
 
-    converter.ConvertImage(config.Path, stream,
-        (output, color) =>
+        string filename = Path.GetFileNameWithoutExtension(output_file)?? string.Empty;
+        string ext = Path.GetExtension(output_file)?? string.Empty;
+
+        for(int i = 1; File.Exists(output_file); i++)
+            output_file = Path.Combine(dir, $"{filename} ({i}){ext}".Trim());
+    }
+
+    Console.Clear();
+
+    Dictionary<float[], List<(float ssim, string glyph)>> preprocessed = 
+        new(StructuralEqualityComparer<float[]>.Default);
+
+    //Read in solutions from file
+    if (!string.IsNullOrWhiteSpace(config.Preprocessed) && File.Exists(config.Preprocessed))
+    {
+        await using var pps = new FileStream(config.Preprocessed, FileMode.Open, FileAccess.Read);
+        using var ppsr = new StreamReader(pps);
+        string? line;
+        while ((line = await ppsr.ReadLineAsync()) != null)
         {
-            //Repeat glyph {CharWidth} times
-            StringBuilder sb = new();
+            var split = line.Split(';', 3);
+            if (split.Length == 3)
+            {
+                var intensities = split[0].Split(',')
+                    .Select(s => float.TryParse(s, out var sf) ? sf : 0)
+                    .ToArray();
+                var ssim = float.TryParse(split[1], out var sm) ? sm : 0;
+                var glyph = split[2];
 
-            for (int i = 0; i < config.CharWidth; i++)
-                sb.Append(output);
+                if(!preprocessed.TryGetValue(intensities, out var values))
+                {
+                    values = [];
+                    preprocessed[intensities] = values;
+                }
 
-            var rv = sb.ToString();
+                values.Add((ssim, glyph));
+            }
+        }
+    }
 
-            //Color the glyph if specified
-            if (!config.NoColor)
-                rv = rv.Pastel(System.Drawing.Color.FromArgb(
-                    (int)(color >> 24) & 0xFF,
-                    (int)(color >> 16) & 0xFF,
-                    (int)(color >> 8) & 0xFF,
-                   (int)color >> 0 & 0xFF));
+    var store = new DictionarySSIMStore() { MaxKeys = (int)long.Clamp((long)preprocessed.Count + short.MaxValue, int.MinValue, int.MaxValue) };
 
-            return rv;
-        },
-        (_, _) => { });
+    foreach ((var intensities, var value) in preprocessed)
+        _ = store.GetOrCalculateAndStoreSoln(intensities.Select(i => (double)i).ToArray(), () => value.MaxBy(v => v.ssim).glyph);
 
-    //string image_as_ascii = converter.ConvertImage(config.Path);
+    List<Stream> streams = [];
 
-    ////Write image to console
-    //Console.WriteLine(image_as_ascii);
+    if (!config.Training && !string.IsNullOrWhiteSpace(output_file))
+        streams.Add(new FileStream(output_file, FileMode.CreateNew, FileAccess.Write));
+
+    using var stream = new UnionStream(streams);
+
+    //Preprocess images
+    if (!string.IsNullOrWhiteSpace(config.Preprocess))
+    {
+        List<string> process_dirs = [config.Path, .. config.TrainingDirs];
+        var process_files = process_dirs.Distinct()
+            .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            .Distinct()
+            .OrderBy(dir => dir);
+
+        await using var pps = new FileStream(config.Preprocess, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+        using var ppsw = new StreamWriter(pps);
+
+        var converter = new SSIMConverter(store, opts =>
+        {
+            opts.FontSize = config.TileSize;
+            opts.FontFace = config.FontFace;
+            opts.Subdivide = config.SubDivide;
+            opts.ParallelCalculate = config.ParallelCalculate;
+            opts.Glyphs = glyphs;
+            opts.InvertFont = config.InvertFont;
+        }); 
+
+        foreach(var file in process_files)
+        {
+            await using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
+
+            List<Thread> write_threads = [];
+
+            foreach(var solution in converter.PreprocessImage(fs))
+            {
+                //Write should be independent of processing
+                Thread write_thread = new(() =>
+                {
+                    lock(ppsw)
+                        ppsw.WriteLine($"{string.Join(',', solution.intensities.Select(i => InternalUtils.Round(i, DictionarySSIMStore.PRECISION)))};{solution.ssim};{solution.glyph}");
+                });
+                write_thread.Start();
+                write_threads.Add(write_thread);
+
+                //Every once and awhile, cull complete threads
+                if (write_threads.Count > 1000)
+                    lock (write_threads)
+                        write_threads.RemoveAll(t => t.ThreadState == ThreadState.Stopped);
+            }
+
+            //Wait for all write threads to complete
+            foreach (var thread in write_threads)
+                thread.Join();
+        }
+    }
+    else if (config.Training)
+    {
+        List<string> training_dirs = [config.Path, ..config.TrainingDirs];
+
+        //Chunk into groups of 2 images, sorted by name
+        const int CHUNK_SIZE = 2;
+        var files_chunks = training_dirs.Distinct()
+            .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            .Distinct()
+            .OrderBy(dir => dir)
+            .Chunk(preprocessed.Count == 0? CHUNK_SIZE : int.MaxValue);
+
+        ITransformer? existing_model = null;
+
+        if (File.Exists(config.Model))
+            existing_model = new MLContext().Model.Load(config.Model, out var schema);
+
+        foreach (var files in files_chunks)
+        {
+            Console.WriteLine($"Training on chunk {string.Join(", ", files)}");
+            using var ts = new PredictionModelSSIMConverter.TrainingSet()
+            {
+                FontFace = config.FontFace,
+                FontSize = config.TileSize,
+                Inputs = files.Select(file =>
+                {
+                    Console.WriteLine($"File: {file}");
+                    return new FileStream(file, FileMode.Open, FileAccess.Read);
+                }),
+                Glyphs = glyphs,
+                DisplayDir = config.TrainingDisplayDir,
+                ParallelCalculate = config.ParallelCalculate,
+                Preprocessed = preprocessed.Count == 0? [] : preprocessed.SelectMany(pair => pair.Value.Select(v => new PredictionModelSSIMConverter.ModelIn()
+                {
+                    Value = pair.Key,
+                    Glyph = v.glyph,
+                    SSIM = v.ssim
+                }))
+            };
+
+            var result = PredictionModelSSIMConverter.Train(
+                new SSIMCalculator(store, opts =>
+                {
+                    opts.Subdivide = config.SubDivide;
+                }), store, ts, existing_model);
+
+            //Save model and use as existing model for next chunk
+            if (!string.IsNullOrWhiteSpace(config.Model))
+            {
+                Console.WriteLine($"Saving chunk to {config.Model}.");
+                var dir_name = Path.GetDirectoryName(config.Model);
+
+                if (!string.IsNullOrWhiteSpace(dir_name) && !Directory.Exists(dir_name))
+                    Directory.CreateDirectory(dir_name);
+
+                result.context.Model.Save(result.model, result.schema, config.Model);
+            }
+
+            Console.WriteLine($"Setting resulting model for chunk as previous model and moving to next chunk.");
+            existing_model = result.model;
+        }
+
+        Console.WriteLine("Done training.");
+    }
+    else
+    {
+        IImageToASCIIConverter converter;
+        switch(config.Method.ToUpper().Trim())
+        {
+            case "SSIM":
+                converter = new SSIMConverter(store, opts =>
+                {
+                    opts.FontSize = config.TileSize;
+                    opts.FontFace = config.FontFace;
+                    opts.Subdivide = config.SubDivide;
+                    opts.ParallelCalculate = config.ParallelCalculate;
+                    opts.Glyphs = glyphs;
+                    opts.InvertFont = config.InvertFont;
+                });
+                break;
+            case "ML":
+            default:
+                var context = new MLContext();
+                var model = context.Model.Load(config.Model, out var schema);
+                var engine = context.Model.CreatePredictionEngine<PredictionModelSSIMConverter.ModelIn,
+                    PredictionModelSSIMConverter.ModelOut>(model, schema);
+
+                converter = new PredictionModelSSIMConverter(engine, new()
+                {
+                    FontFace = config.FontFace,
+                    FontSize = config.TileSize,
+                    InvertFont = config.InvertFont
+                });
+                break;
+        }
+
+#pragma warning disable SYSLIB1045 // Convert to 'GeneratedRegexAttribute'.
+        var nl = new Regex(@"^[\n\r]+$");
+#pragma warning restore SYSLIB1045 // Convert to 'GeneratedRegexAttribute'.
+
+        using var image_stream = new FileStream(config.Path, FileMode.Open, FileAccess.Read);
+        using var stream_writer = new StreamWriter(stream);
+
+        foreach((var glyph, var color) in converter.ConvertImage(image_stream))
+        {
+            var repeat = nl.IsMatch(glyph) ? 1 : Math.Max(1, config.Repeat);
+
+            for(int i = 0; i < repeat; i++)
+            {
+                Console.Write(config.NoColor ? glyph : Color(glyph, color));
+                stream_writer.Write(glyph);
+            }
+        }
+    }   
 }
-catch(Exception e)
+catch (Exception e)
 {
     Console.Error.WriteLine($"An error occurred: {e.Message}\r\n{e.StackTrace}");
+}
+
+static string Color(string s, uint? color = null)
+{
+    System.Drawing.Color? c = null;
+
+    if (color != null)
+    {
+        c = System.Drawing.Color.FromArgb(
+            (int)(color >> 24) & 0xFF,
+            (int)(color >> 16) & 0xFF,
+            (int)(color >> 8) & 0xFF,
+            (int)color & 0xFF);
+    }
+
+    StringBuilder sb = new();
+
+    string cs = s;
+
+    if (c.HasValue)
+        cs = cs.Pastel(c.Value);
+
+    sb.Append(cs);
+
+    return sb.ToString();
 }

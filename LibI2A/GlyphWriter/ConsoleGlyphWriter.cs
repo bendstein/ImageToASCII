@@ -1,10 +1,5 @@
 ﻿using Pastel;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace LibI2A.GlyphWriter;
 public class ConsoleGlyphWriter : IGlyphWriter
@@ -12,11 +7,6 @@ public class ConsoleGlyphWriter : IGlyphWriter
     public bool SeekEnabled => ANSIEscapesEnabled;
 
     public bool SeekLinearEnabled => false;
-
-    /// <summary>
-    /// Whether object has been disposed
-    /// </summary>
-    private bool disposed = false;
 
     /// <summary>
     /// If <see langword="true"/>, will write colored glyphs using ANSI escape sequences
@@ -33,13 +23,26 @@ public class ConsoleGlyphWriter : IGlyphWriter
 
     }
 
-    public void Write(Glyph glyph, uint? color = null)
+    public void Write(string s, uint? color = null)
     {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
+        Console.Write(Color(s, color));
+    }
 
+    public void WriteLine(string s, uint? color = null)
+    {
+        Console.WriteLine(Color(s, color));
+    }
+
+    public void WriteLine()
+    {
+        Console.WriteLine();
+    }
+
+    private string Color(string s, uint? color = null)
+    {
         System.Drawing.Color? c = null;
 
-        if(color != null)
+        if (color != null)
         {
             c = System.Drawing.Color.FromArgb(
                 (int)(color >> 24) & 0xFF,
@@ -48,40 +51,25 @@ public class ConsoleGlyphWriter : IGlyphWriter
                 (int)color & 0xFF);
         }
 
+        StringBuilder sb = new();
+
         for (int i = 0; i < Math.Max(1, Repeat); i++)
         {
-            string s = glyph.Symbol.ToString();
+            string cs = s;
 
-            if(ANSIEscapesEnabled && c.HasValue)
-            {
-                s = s.Pastel(c.Value);
-            }
+            if (ANSIEscapesEnabled && c.HasValue)
+                cs = cs.Pastel(c.Value);
 
-            Console.Write(s);
+            sb.Append(cs);
         }
+
+        return sb.ToString();
     }
 
-    public void Write(string s)
-    {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
-        Console.Write(s);
-    }
-
-    public void WriteLine()
-    {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
-        Console.WriteLine();
-    }
-
-    public void Flush() 
-    { 
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
-    }
+    public void Flush() { }
 
     public void Seek(int i, int j)
     {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
-
         if (SeekEnabled)
         {
             Console.Write($"\x1b[{i};{j}H");
@@ -94,7 +82,6 @@ public class ConsoleGlyphWriter : IGlyphWriter
 
     public void SeekLinear(long offset)
     {
-        if (disposed) throw new ObjectDisposedException(nameof(StreamGlyphWriter));
         throw new NotImplementedException();
     }
 }

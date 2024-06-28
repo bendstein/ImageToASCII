@@ -1,7 +1,5 @@
 ﻿using Microsoft.Data.Sqlite;
 using Spectre.Console;
-using System.Data.Common;
-using System.Linq;
 using System.Text;
 
 const string DB_EXT = ".db";
@@ -15,14 +13,14 @@ if (args.Length > 0)
 else
 {
     Console.Write($"Enter the path the the sqlite database file: ");
-    path = Console.ReadLine()?? string.Empty;
+    path = Console.ReadLine() ?? string.Empty;
 }
 
 try
 {
     _ = new FileInfo(path);
 }
-catch(Exception e)
+catch (Exception e)
 {
     throw new Exception($"Invalid file path '{path}': {e.Message}");
 }
@@ -35,22 +33,22 @@ connection.Open();
 
 Console.WriteLine();
 
-while(true)
+while (true)
 {
     Console.WriteLine($"Enter the sql statement to run, {CLEAR} to clear the screen, or {EXIT} to exit.");
 
     StringBuilder stmtbuilder = new();
     string? line;
-    
-    while((line = Console.ReadLine()) != null && line != string.Empty)
+
+    while ((line = Console.ReadLine()) != null && line != string.Empty)
     {
-        if(stmtbuilder.Length == 0)
+        if (stmtbuilder.Length == 0)
         {
-            if(line == EXIT)
+            if (line == EXIT)
             {
                 Environment.Exit(0);
             }
-            else if(line == CLEAR)
+            else if (line == CLEAR)
             {
                 Console.Clear();
                 break;
