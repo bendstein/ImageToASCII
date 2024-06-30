@@ -1,6 +1,4 @@
-﻿using System.Security.Cryptography.X509Certificates;
-
-namespace LibI2A.SSIM;
+﻿namespace LibI2A.SSIM;
 
 public class SSIMCalculator : ISSIMCalculator
 {
@@ -8,7 +6,7 @@ public class SSIMCalculator : ISSIMCalculator
 
     private readonly Options options;
 
-    private static readonly (double H, double S, double V) HSV_WEIGHTS = (1, 1.2d, 1);
+    private static readonly (double H, double S, double V) HSV_WEIGHTS = (1, 1.2d, 1.1d);
 
     public SSIMCalculator(ISSIMStore store, Action<Options>? configure = null)
     {

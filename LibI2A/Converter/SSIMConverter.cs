@@ -114,7 +114,7 @@ public class SSIMConverter : IImageToASCIIConverter
                     return max.key;
                 });
 
-            yield return (glyph, combined);
+            yield return (glyph, options.NoColor? null : combined);
             n++;
         }
 
@@ -247,7 +247,7 @@ public class SSIMConverter : IImageToASCIIConverter
             //(var inv_glyph, var inv_glyphs) = getGlyphs(glyph_images_inv);
 
             //Print best match
-            Write(glyph, combined);
+            Write(glyph, options.NoColor? null : combined);
 
             var intensities = tile.GetIntensities().ToArray();
 
@@ -271,6 +271,8 @@ public class SSIMConverter : IImageToASCIIConverter
         public string FontFace { get; set; } = string.Empty;
 
         public bool InvertFont { get; set; } = false;
+
+        public bool NoColor { get; set; } = false;
 
         public int ParallelCalculate { get; set; } = 1;
 

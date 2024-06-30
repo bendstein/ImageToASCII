@@ -191,6 +191,7 @@ try
             opts.FontFace = config.FontFace;
             opts.Subdivide = config.SubDivide;
             opts.ParallelCalculate = config.ParallelCalculate;
+            opts.NoColor = config.NoColor;
             opts.Glyphs = glyphs;
             opts.InvertFont = config.InvertFont;
         });
@@ -256,6 +257,7 @@ try
                 opts.FontFace = config.FontFace;
                 opts.Subdivide = config.SubDivide;
                 opts.ParallelCalculate = config.ParallelCalculate;
+                opts.NoColor = config.NoColor;
                 opts.Glyphs = glyphs;
                 opts.InvertFont = config.InvertFont;
             });
@@ -366,6 +368,7 @@ try
                     opts.ParallelCalculate = config.ParallelCalculate;
                     opts.Glyphs = glyphs;
                     opts.InvertFont = config.InvertFont;
+                    opts.NoColor = config.NoColor;
                 });
                 break;
             case "NN":
