@@ -9,9 +9,21 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="db\**" />
     <Compile Remove="Input\**" />
+    <Compile Remove="model\**" />
+    <Compile Remove="Training 2\**" />
+    <Compile Remove="Training\**" />
+    <EmbeddedResource Remove="db\**" />
     <EmbeddedResource Remove="Input\**" />
+    <EmbeddedResource Remove="model\**" />
+    <EmbeddedResource Remove="Training 2\**" />
+    <EmbeddedResource Remove="Training\**" />
+    <None Remove="db\**" />
     <None Remove="Input\**" />
+    <None Remove="model\**" />
+    <None Remove="Training 2\**" />
+    <None Remove="Training\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,10 +31,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Magick.NET-Q16-AnyCPU" Version="13.4.0" />
-    <PackageReference Include="Magick.NET.Core" Version="13.4.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="7.0.13" />
-    <PackageReference Include="Pastel" Version="4.2.0" />
+    <PackageReference Include="Magick.NET-Q16-AnyCPU" Version="13.9.1" />
+    <PackageReference Include="Magick.NET.Core" Version="13.9.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.6" />
+    <PackageReference Include="Pastel" Version="5.1.0" />
   </ItemGroup>
 
   <ItemGroup>

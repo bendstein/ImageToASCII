@@ -8,7 +8,7 @@ public class DictionarySSIMStore : ISSIMStore
         PRECISION = 7,
         MAX_KEYS = short.MaxValue;
 
-    public const float
+    public const double
         CULL_RATIO = 0.5f;
 
     private readonly Dictionary<string, double> dict = [];

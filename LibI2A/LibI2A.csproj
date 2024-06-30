@@ -7,12 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Magick.NET-Q16-AnyCPU" Version="13.4.0" />
-    <PackageReference Include="Magick.NET.Core" Version="13.4.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="7.0.13" />
-    <PackageReference Include="Microsoft.ML" Version="3.0.1" />
-    <PackageReference Include="Microsoft.ML.FastTree" Version="3.0.1" />
-    <PackageReference Include="Pastel" Version="4.2.0" />
+    <PackageReference Include="Magick.NET-Q16-AnyCPU" Version="13.9.1" />
+    <PackageReference Include="Magick.NET.Core" Version="13.9.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="8.0.6" />
+    <PackageReference Include="Pastel" Version="5.1.0" />
   </ItemGroup>
 
 </Project>

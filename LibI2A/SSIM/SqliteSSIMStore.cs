@@ -10,7 +10,7 @@ public class SqliteSSIMStore : ISSIMStore, IDisposable
         PRECISION = 8,
         MAX_KEYS = ushort.MaxValue;
 
-    private const float
+    private const double
         CULL_RATIO = 0.5f;
 
     private readonly Dictionary<(double[] a, double[] b), double> dict

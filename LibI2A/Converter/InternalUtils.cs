@@ -89,23 +89,23 @@ public static class InternalUtils
     {
         //Magic numbers
         const double
-            LINEAR_POWER = 2.2f,
-            COEFF_R = 0.2126f,
-            COEFF_G = 0.7152f,
-            COEFF_B = 0.0722f;
+            LINEAR_POWER = 2.2d,
+            COEFF_R = 0.2126d,
+            COEFF_G = 0.7152d,
+            COEFF_B = 0.0722d;
 
         //Linearize each component
         //(RGB is encoded in a power curve whereas luminance is linear)
-        (var r_lin, var g_lin, var b_lin) = (Math.Pow(argb.r / (float)0xFF, LINEAR_POWER), Math.Pow(argb.g / (float)0xFF, LINEAR_POWER), Math.Pow(argb.b / (float)0xFF, LINEAR_POWER));
+        (var r_lin, var g_lin, var b_lin) = (Math.Pow(argb.r / (double)0xFF, LINEAR_POWER), Math.Pow(argb.g / (double)0xFF, LINEAR_POWER), Math.Pow(argb.b / (double)0xFF, LINEAR_POWER));
 
         //Calculate luminance
         var y = COEFF_R * r_lin + COEFF_G * g_lin + COEFF_B * b_lin;
 
-        return y / 0xFF;
+        return y;
     }
 
     internal static byte ScaleUShort(ushort n)
-        => (byte)Math.Min(((float)n / ushort.MaxValue) * byte.MaxValue, byte.MaxValue);
+        => (byte)Math.Min(((double)n / ushort.MaxValue) * byte.MaxValue, byte.MaxValue);
 
     internal static (uint a, uint r, uint g, uint b) ToARGB(uint color) => ((color >> 24) & 0xFF, (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
 
@@ -133,7 +133,7 @@ public static class InternalUtils
             {
                 (uint prev_a, uint prev_r, uint prev_g, uint prev_b) = (ScaleUShort(prev_color.A), ScaleUShort(prev_color.R), ScaleUShort(prev_color.G), ScaleUShort(prev_color.B));
 
-                var ratio = (float)a / 0xFF;
+                var ratio = (double)a / 0xFF;
 
                 a = prev_a + (uint)Math.Floor(ratio * (0xFF - prev_a));
                 r = (uint)Math.Floor(((1f - ratio) * prev_r) + (ratio * r));

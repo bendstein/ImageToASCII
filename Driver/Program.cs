@@ -3,8 +3,6 @@ using LibI2A;
 using LibI2A.Common;
 using LibI2A.Converter;
 using LibI2A.SSIM;
-using Microsoft.Data.Sqlite;
-using Microsoft.ML;
 using Pastel;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -68,41 +66,95 @@ try
 
     Console.Clear();
 
-    Dictionary<float[], List<(float ssim, string glyph)>> preprocessed = 
-        new(StructuralEqualityComparer<float[]>.Default);
-
-    //Read in solutions from file
-    if (!string.IsNullOrWhiteSpace(config.Preprocessed) && File.Exists(config.Preprocessed))
+    void Log(string message, bool is_error = false)
     {
-        await using var pps = new FileStream(config.Preprocessed, FileMode.Open, FileAccess.Read);
-        using var ppsr = new StreamReader(pps);
-        string? line;
-        while ((line = await ppsr.ReadLineAsync()) != null)
-        {
-            var split = line.Split(';', 3);
-            if (split.Length == 3)
-            {
-                var intensities = split[0].Split(',')
-                    .Select(s => float.TryParse(s, out var sf) ? sf : 0)
-                    .ToArray();
-                var ssim = float.TryParse(split[1], out var sm) ? sm : 0;
-                var glyph = split[2];
+        var now = DateTime.Now;
 
-                if(!preprocessed.TryGetValue(intensities, out var values))
-                {
-                    values = [];
-                    preprocessed[intensities] = values;
-                }
-
-                values.Add((ssim, glyph));
-            }
-        }
+        if (is_error)
+            Console.Error.WriteLine($"{now:HH:mm:ss.ffff} [ERROR] | {message}");
+        else
+            Console.WriteLine($"{now:HH:mm:ss.ffff} [INFO]  | {message}");
     }
 
-    var store = new DictionarySSIMStore() { MaxKeys = (int)long.Clamp((long)preprocessed.Count + short.MaxValue, int.MinValue, int.MaxValue) };
+    int stop = 0;
 
-    foreach ((var intensities, var value) in preprocessed)
-        _ = store.GetOrCalculateAndStoreSoln(intensities.Select(i => (double)i).ToArray(), () => value.MaxBy(v => v.ssim).glyph);
+    Console.CancelKeyPress += (sender, e) =>
+    {
+        e.Cancel = true;
+        Log("Stopping...");
+        stop++;
+    };
+
+    List<NeuralNetConverter.Input> preprocessed = [];
+
+    //Read in solutions from file
+    if (!string.IsNullOrWhiteSpace(config.Preprocessed))
+    {
+        List<string> preprocessed_files = [];
+
+        if(File.Exists(config.Preprocessed))
+        {
+            preprocessed_files.Add(config.Preprocessed);
+        }
+        else if(Directory.Exists(config.Preprocessed))
+        {
+            preprocessed_files.AddRange(Directory.EnumerateFiles(config.Preprocessed, "*.txt", SearchOption.AllDirectories));
+        }
+        
+        foreach(var file in preprocessed_files)
+        {
+            await using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
+            using var fsr = new StreamReader(fs);
+
+            string? line;
+            while ((line = await fsr.ReadLineAsync()) != null)
+            {
+                var split = line.Split(" ; ");
+
+                if(split.Length > 0)
+                {
+                    var intensities = split[0].Split(" , ")
+                        .Select(s => double.TryParse(s, out var sf) ? sf : 0)
+                        .ToArray();
+
+                    double[] ssims = new double[glyphs.Length];
+
+                    for(int i = 1; i < split.Length; i++)
+                    {
+                        var pair = split[i].Split(" , ", 2);
+
+                        if(pair.Length == 2)
+                        {
+                            var glyph = pair[0];
+                            var ssim = double.TryParse(pair[1], out var f) ? f : 0;
+
+                            for(int g = 0; g < glyphs.Length; g++)
+                            {
+                                if (glyphs[g].Equals(glyph))
+                                {
+                                    ssims[g] = ssim;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    preprocessed.Add(new()
+                    {
+                        Intensities = intensities,
+                        SSIMs = ssims
+                    });
+                }
+            }
+        }
+
+        Log($"Read in {preprocessed.Count} solutions.");
+    }
+
+    if (stop > 0)
+        return;
+
+    var store = new DictionarySSIMStore();
 
     List<Stream> streams = [];
 
@@ -131,21 +183,38 @@ try
             opts.ParallelCalculate = config.ParallelCalculate;
             opts.Glyphs = glyphs;
             opts.InvertFont = config.InvertFont;
-        }); 
+        });
 
-        foreach(var file in process_files)
+        List<Thread> write_threads = [];
+
+        foreach (var file in process_files)
         {
+            if (stop > 0)
+                break;
+
+            Log($"Preprocessing image {file}.");
+
             await using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
 
-            List<Thread> write_threads = [];
+            if (!Directory.Exists("log"))
+                Directory.CreateDirectory("log");
 
-            foreach(var solution in converter.PreprocessImage(fs))
+            await using var ls = new FileStream($"log/{Path.GetFileNameWithoutExtension(file)}.log", FileMode.OpenOrCreate, FileAccess.ReadWrite);
+
+            Log($"View image progress at log/{Path.GetFileNameWithoutExtension(file)}.log.");
+            
+            using var lsw = new StreamWriter(ls);
+
+            foreach(var solution in converter.ProcessImage(fs, lsw))
             {
+                if (stop > 0)
+                    break;
+
                 //Write should be independent of processing
                 Thread write_thread = new(() =>
                 {
                     lock(ppsw)
-                        ppsw.WriteLine($"{string.Join(',', solution.intensities.Select(i => InternalUtils.Round(i, DictionarySSIMStore.PRECISION)))};{solution.ssim};{solution.glyph}");
+                        ppsw.WriteLine($"{string.Join(',', solution.intensities.Select(i => InternalUtils.Round(i, DictionarySSIMStore.PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
                 });
                 write_thread.Start();
                 write_threads.Add(write_thread);
@@ -155,75 +224,155 @@ try
                     lock (write_threads)
                         write_threads.RemoveAll(t => t.ThreadState == ThreadState.Stopped);
             }
-
-            //Wait for all write threads to complete
-            foreach (var thread in write_threads)
-                thread.Join();
         }
+
+        //Wait for all write threads to complete
+        Log($"Waiting for all preprocessing threads to finish.");
+
+        foreach (var thread in write_threads)
+        {
+            if (stop > 1)
+                return;
+
+            thread.Join();
+        }
+
+        if (stop > 0)
+            return;
     }
     else if (config.Training)
     {
         List<string> training_dirs = [config.Path, ..config.TrainingDirs];
 
         //Chunk into groups of 2 images, sorted by name
-        const int CHUNK_SIZE = 2;
+        const int CHUNK_SIZE = 1;
         var files_chunks = training_dirs.Distinct()
             .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             .Distinct()
             .OrderBy(dir => dir)
             .Chunk(preprocessed.Count == 0? CHUNK_SIZE : int.MaxValue);
 
-        ITransformer? existing_model = null;
+        NeuralNetConverter.Model? model = null;
 
-        if (File.Exists(config.Model))
-            existing_model = new MLContext().Model.Load(config.Model, out var schema);
+        if(!string.IsNullOrWhiteSpace(config.Model) && File.Exists(config.Model))
+        {
+            Log($"Reading model from {config.Model}.");
+
+            using var fs = new FileStream(config.Model, FileMode.Open, FileAccess.Read);
+            using var ms = new MemoryStream();
+            fs.CopyTo(ms);
+            var bytes = ms.GetBuffer();
+            model = NeuralNetConverter.Model.FromBytes(bytes);
+        }
+
+        Log("Training...");
 
         foreach (var files in files_chunks)
         {
-            Console.WriteLine($"Training on chunk {string.Join(", ", files)}");
-            using var ts = new PredictionModelSSIMConverter.TrainingSet()
+            if (stop > 0)
+                break;
+
+            var training_converter = new SSIMConverter(store, opts =>
             {
-                FontFace = config.FontFace,
-                FontSize = config.TileSize,
-                Inputs = files.Select(file =>
-                {
-                    Console.WriteLine($"File: {file}");
-                    return new FileStream(file, FileMode.Open, FileAccess.Read);
-                }),
-                Glyphs = glyphs,
-                DisplayDir = config.TrainingDisplayDir,
-                ParallelCalculate = config.ParallelCalculate,
-                Preprocessed = preprocessed.Count == 0? [] : preprocessed.SelectMany(pair => pair.Value.Select(v => new PredictionModelSSIMConverter.ModelIn()
-                {
-                    Value = pair.Key,
-                    Glyph = v.glyph,
-                    SSIM = v.ssim
-                }))
-            };
+                opts.FontSize = config.TileSize;
+                opts.FontFace = config.FontFace;
+                opts.Subdivide = config.SubDivide;
+                opts.ParallelCalculate = config.ParallelCalculate;
+                opts.Glyphs = glyphs;
+                opts.InvertFont = config.InvertFont;
+            });
 
-            var result = PredictionModelSSIMConverter.Train(
-                new SSIMCalculator(store, opts =>
-                {
-                    opts.Subdivide = config.SubDivide;
-                }), store, ts, existing_model);
-
-            //Save model and use as existing model for next chunk
-            if (!string.IsNullOrWhiteSpace(config.Model))
+            IEnumerable<NeuralNetConverter.Input> enumerateInput()
             {
-                Console.WriteLine($"Saving chunk to {config.Model}.");
-                var dir_name = Path.GetDirectoryName(config.Model);
+                if(preprocessed.Count > 0)
+                {
+                    foreach (var datum in preprocessed)
+                    {
+                        if (stop > 0)
+                            yield break;
 
-                if (!string.IsNullOrWhiteSpace(dir_name) && !Directory.Exists(dir_name))
-                    Directory.CreateDirectory(dir_name);
+                        yield return datum;
+                    }
+                    yield break;
+                }
 
-                result.context.Model.Save(result.model, result.schema, config.Model);
+                foreach (var file in files)
+                {
+                    using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
+
+                    if (!Directory.Exists("log"))
+                        Directory.CreateDirectory("log");
+
+                    using var ls = new FileStream($"log/{Path.GetFileNameWithoutExtension(file)}.log", FileMode.OpenOrCreate, FileAccess.ReadWrite);
+                    using var lsw = new StreamWriter(ls);
+
+                    var data = training_converter.ProcessImage(fs, lsw);
+
+                    foreach (var datum in data)
+                    {
+                        double[] ssims = new double[glyphs.Length];
+
+                        for (int i = 0; i < datum.scores.Length; i++)
+                        {
+                            (var glyph, var ssim) = datum.scores[i];
+
+                            for (int g = 0; g < glyphs.Length; g++)
+                            {
+                                if (glyphs[g].Equals(glyph))
+                                {
+                                    ssims[g] = ssim;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (stop > 0)
+                            yield break;
+
+                        yield return new NeuralNetConverter.Input()
+                        {
+                            Intensities = datum.intensities,
+                            SSIMs = ssims
+                        };
+                    }
+
+                    if (stop > 0)
+                        yield break;
+                }
+
+                yield break;
             }
 
-            Console.WriteLine($"Setting resulting model for chunk as previous model and moving to next chunk.");
-            existing_model = result.model;
+            if (NeuralNetConverter.Train(new()
+            {
+                FeatureSize = config.TileSize * config.TileSize,
+                Glyphs = glyphs,
+                HiddenLayers = 2,
+                LearningRate = 1,
+                LearningRateDecay = 0.005,
+                TrainingRate = 1,
+                InitialModel = model,
+                TrainingData = enumerateInput()
+            }, Log, out var trained, out var error_message))
+            {
+                model = trained;
+            }
+            else
+            {
+                model = null;
+                throw new Exception($"Failed to train model. {error_message}");
+            }
         }
 
-        Console.WriteLine("Done training.");
+        if(model != null && !string.IsNullOrWhiteSpace(config.Model))
+        {
+            Log($"Writing model to {config.Model}.");
+            using var fs = new FileStream(config.Model, FileMode.Create, FileAccess.ReadWrite);
+            var model_bytes = model.ToBytes();
+            fs.Write(model_bytes);
+        }
+
+        Log("Done training.");
     }
     else
     {
@@ -241,19 +390,25 @@ try
                     opts.InvertFont = config.InvertFont;
                 });
                 break;
-            case "ML":
+            case "NN":
             default:
-                var context = new MLContext();
-                var model = context.Model.Load(config.Model, out var schema);
-                var engine = context.Model.CreatePredictionEngine<PredictionModelSSIMConverter.ModelIn,
-                    PredictionModelSSIMConverter.ModelOut>(model, schema);
+                NeuralNetConverter.Model? model = null;
 
-                converter = new PredictionModelSSIMConverter(engine, new()
+                if (!string.IsNullOrWhiteSpace(config.Model) && File.Exists(config.Model))
                 {
-                    FontFace = config.FontFace,
-                    FontSize = config.TileSize,
-                    InvertFont = config.InvertFont
-                });
+                    Log($"Reading model from {config.Model}.");
+
+                    using var fs = new FileStream(config.Model, FileMode.Open, FileAccess.Read);
+                    using var ms = new MemoryStream();
+                    fs.CopyTo(ms);
+                    var bytes = ms.GetBuffer();
+                    model = NeuralNetConverter.Model.FromBytes(bytes);
+                }
+
+                if (model == null)
+                    throw new Exception($"No model present.");
+
+                converter = new NeuralNetConverter(model);
                 break;
         }
 
@@ -266,6 +421,9 @@ try
 
         foreach((var glyph, var color) in converter.ConvertImage(image_stream))
         {
+            if (stop > 0)
+                return;
+
             var repeat = nl.IsMatch(glyph) ? 1 : Math.Max(1, config.Repeat);
 
             for(int i = 0; i < repeat; i++)

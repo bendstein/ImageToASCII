@@ -1,6 +1,5 @@
 ﻿using ImageMagick;
 using LibI2A.SSIM;
-using static LibI2A.Converter.PredictionModelSSIMConverter;
 
 namespace LibI2A.Converter;
 public class SSIMConverter : IImageToASCIIConverter
@@ -121,8 +120,24 @@ public class SSIMConverter : IImageToASCIIConverter
         yield break;
     }
 
-    public IEnumerable<(float[] intensities, float ssim, string glyph)> PreprocessImage(Stream input)
+    public IEnumerable<(double[] intensities, (string glyph, double ssim)[] scores)> ProcessImage(Stream input, StreamWriter? writer = null)
     {
+        void WriteLine()
+        {
+            if (writer == null)
+                Console.WriteLine();
+            else
+                writer.WriteLine();
+        }
+
+        void Write(string s)
+        {
+            if (writer == null)
+                Console.Write(s);
+            else
+                writer.Write(s);
+        }
+
         using var image_collection = new MagickImageCollection(input);
         image_collection.Coalesce();
         var image = image_collection.First();
@@ -141,21 +156,21 @@ public class SSIMConverter : IImageToASCIIConverter
 
             //Line break in console
             if (n > 0 && (n % width) == 0)
-                Console.WriteLine();
+                WriteLine();
 
-            //Get glyphs that are most structurally similar to this tile
-            (string primary, Dictionary<string, float> similar) getGlyphs(Dictionary<string, PixelImage> glyphs)
+            //Get all glyphs and values
+            (string primary, Dictionary<string, double> similar) getGlyphs(Dictionary<string, PixelImage> glyphs)
             {
                 SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
-                Dictionary<string, float> scores = [];
-                (string key, float value) max = (string.Empty, float.MinValue);
+                Dictionary<string, double> scores = [];
+                (string key, double value) max = (string.Empty, double.MinValue);
 
                 //Find the glyph(s) that are most similar to this tile
                 List<Thread> threads = glyphs.Select(img => new Thread(() =>
                 {
                     try
                     {
-                        var score = (float)double.Clamp(calculator.Calculate(tile, img.Value), float.MinValue, float.MaxValue);
+                        var score = calculator.Calculate(tile, img.Value);
 
                         lock (scores)
                         {
@@ -184,31 +199,22 @@ public class SSIMConverter : IImageToASCIIConverter
                 foreach (var thread in threads)
                     thread.Join();
 
-                //Return all glyphs within 5% of the maximum
-                const float ERR = 0.05f;
-
-                var matching = scores.Where(pair => (Math.Abs(pair.Value - max.value) / max.value) < ERR).ToDictionary();
-
                 //Return maximum
-                return (max.key, matching);
+                return (max.key, scores);
             }
 
             (var glyph, var glyphs) = getGlyphs(glyph_images);
             //(var inv_glyph, var inv_glyphs) = getGlyphs(glyph_images_inv);
 
-            var intensities = tile.Intensities.Select(it => (float)double.Clamp(it, float.MinValue, float.MaxValue));
+            //Print best match
+            Write(glyph);
 
-            //Print random matching glyph to the console
-            if (glyphs.Count > 0)
-                Console.Write(glyphs.Keys.OrderBy(k => Random.Shared.Next()).First());
-            else
-                Console.Write(' ');
+            var intensities = tile.Intensities.ToArray();
 
-            foreach (var g in glyphs)
-                yield return (intensities.ToArray(), g.Value, g.Key);
+            yield return (intensities, glyphs.Select(g => (g.Key, g.Value)).ToArray());
         }
 
-        Console.WriteLine();
+        WriteLine();
         yield break;
     }
 
