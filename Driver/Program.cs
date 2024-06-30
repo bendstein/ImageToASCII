@@ -423,7 +423,12 @@ static string Color(string s, uint? color = null)
     string cs = s;
 
     if (c.HasValue)
-        cs = cs.Pastel(c.Value);
+    {
+        if (string.IsNullOrWhiteSpace(s))
+            cs = cs.PastelBg(c.Value);
+        else
+            cs.Pastel(c.Value);
+    }    
 
     sb.Append(cs);
 
