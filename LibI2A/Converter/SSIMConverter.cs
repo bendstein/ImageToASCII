@@ -145,10 +145,7 @@ public class SSIMConverter : IImageToASCIIConverter
                         (int)(color >> 8) & 0xFF,
                         (int)color & 0xFF);
 
-                    if (string.IsNullOrWhiteSpace(s))
-                        cs = cs.PastelBg(c.Value);
-                    else
-                        cs.Pastel(c.Value);
+                    cs = cs.Pastel(c.Value);
                 }
 
                 Console.Write(cs);
