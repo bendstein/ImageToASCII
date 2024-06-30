@@ -42,7 +42,7 @@ try
     //Read glyphs file
     string[] glyphs;
 
-    await using (var fs = new FileStream(config.Glyphs, FileMode.Open, FileAccess.Read))
+    using (var fs = new FileStream(config.Glyphs, FileMode.Open, FileAccess.Read))
         glyphs = Utils.ReadGlyphsFile(fs);
 
     if (glyphs.Length == 0)
@@ -85,70 +85,80 @@ try
         stop++;
     };
 
-    List<NeuralNetConverter.Input> preprocessed = [];
-
     //Read in solutions from file
-    if (!string.IsNullOrWhiteSpace(config.Preprocessed))
+    IEnumerable<NeuralNetConverter.Input> LoadPreprocessed()
     {
-        List<string> preprocessed_files = [];
+        if (!string.IsNullOrWhiteSpace(config.Preprocessed))
+        {
+            List<string> preprocessed_files = [];
 
-        if(File.Exists(config.Preprocessed))
-        {
-            preprocessed_files.Add(config.Preprocessed);
-        }
-        else if(Directory.Exists(config.Preprocessed))
-        {
-            preprocessed_files.AddRange(Directory.EnumerateFiles(config.Preprocessed, "*.txt", SearchOption.AllDirectories));
-        }
-        
-        foreach(var file in preprocessed_files)
-        {
-            await using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
-            using var fsr = new StreamReader(fs);
-
-            string? line;
-            while ((line = await fsr.ReadLineAsync()) != null)
+            if (File.Exists(config.Preprocessed))
             {
-                var split = line.Split(" ; ");
+                preprocessed_files.Add(config.Preprocessed);
+            }
+            else if (Directory.Exists(config.Preprocessed))
+            {
+                preprocessed_files.AddRange(Directory.EnumerateFiles(config.Preprocessed, "*.txt", SearchOption.AllDirectories));
+            }
 
-                if(split.Length > 0)
+            foreach (var file in preprocessed_files)
+            {
+                if (stop > 0)
+                    yield break;
+
+                using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
+                using var fsr = new StreamReader(fs);
+
+                string? line;
+                while ((line = fsr.ReadLine()) != null)
                 {
-                    var intensities = split[0].Split(" , ")
-                        .Select(s => double.TryParse(s, out var sf) ? sf : 0)
-                        .ToArray();
+                    if (stop > 0)
+                        yield break;
 
-                    double[] ssims = new double[glyphs.Length];
+                    var split = line.Split(" ; ");
 
-                    for(int i = 1; i < split.Length; i++)
+                    if (split.Length > 0)
                     {
-                        var pair = split[i].Split(" , ", 2);
+                        var intensities = split[0].Split(" , ")
+                            .Select(s => double.TryParse(s, out var sf) ? sf : 0)
+                            .ToArray();
 
-                        if(pair.Length == 2)
+                        double[] ssims = new double[glyphs.Length];
+
+                        for (int i = 1; i < split.Length; i++)
                         {
-                            var glyph = pair[0];
-                            var ssim = double.TryParse(pair[1], out var f) ? f : 0;
+                            if (stop > 0)
+                                yield break;
 
-                            for(int g = 0; g < glyphs.Length; g++)
+                            var pair = split[i].Split(" , ", 2);
+
+                            if (pair.Length == 2)
                             {
-                                if (glyphs[g].Equals(glyph))
+                                var glyph = pair[0];
+                                var ssim = double.TryParse(pair[1], out var f) ? f : 0;
+
+                                for (int g = 0; g < glyphs.Length; g++)
                                 {
-                                    ssims[g] = ssim;
-                                    break;
+                                    if (glyphs[g].Equals(glyph))
+                                    {
+                                        ssims[g] = ssim;
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    preprocessed.Add(new()
-                    {
-                        Intensities = intensities,
-                        SSIMs = ssims
-                    });
+                        yield return new()
+                        {
+                            Intensities = intensities,
+                            SSIMs = ssims
+                        };
+                    }
                 }
             }
         }
 
-        Log($"Read in {preprocessed.Count} solutions.");
+        yield break;
     }
 
     if (stop > 0)
@@ -172,7 +182,7 @@ try
             .Distinct()
             .OrderBy(dir => dir);
 
-        await using var pps = new FileStream(config.Preprocess, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+        using var pps = new FileStream(config.Preprocess, FileMode.OpenOrCreate, FileAccess.ReadWrite);
         using var ppsw = new StreamWriter(pps);
 
         var converter = new SSIMConverter(store, opts =>
@@ -192,7 +202,7 @@ try
 
             Log($"Preprocessing image {file}.");
 
-            await using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
+            using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
 
             foreach(var solution in converter.ProcessImage(fs))
             {
@@ -210,13 +220,15 @@ try
     {
         List<string> training_dirs = [config.Path, ..config.TrainingDirs];
 
+        var preprocessed = LoadPreprocessed();
+
         //Chunk into groups of 2 images, sorted by name
         const int CHUNK_SIZE = 1;
         var files_chunks = training_dirs.Distinct()
             .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             .Distinct()
             .OrderBy(dir => dir)
-            .Chunk(preprocessed.Count == 0? CHUNK_SIZE : int.MaxValue);
+            .Chunk(preprocessed.Any()? int.MaxValue : CHUNK_SIZE);
 
         NeuralNetConverter.Model? model = null;
 
@@ -250,7 +262,7 @@ try
 
             IEnumerable<NeuralNetConverter.Input> enumerateInput()
             {
-                if(preprocessed.Count > 0)
+                if(preprocessed.Any())
                 {
                     foreach (var datum in preprocessed)
                     {
