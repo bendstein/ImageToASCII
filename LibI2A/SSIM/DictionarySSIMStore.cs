@@ -6,7 +6,7 @@ public class DictionarySSIMStore : ISSIMStore
 {
     public const int 
         PRECISION = 7,
-        MAX_KEYS = short.MaxValue;
+        MAX_KEYS = 2 << 13;
 
     public const double
         CULL_RATIO = 0.5f;

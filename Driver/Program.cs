@@ -164,7 +164,7 @@ try
     if (stop > 0)
         return;
 
-    var store = new DictionarySSIMStore();
+    var store = new NoSSIMStore();
 
     List<Stream> streams = [];
 

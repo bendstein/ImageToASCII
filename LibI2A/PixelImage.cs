@@ -16,7 +16,8 @@ public class PixelImage
 
     public int BitDepth => OriginalImage.DetermineBitDepth();
 
-    public List<double> Intensities => Pixels.Select(p => p?.GetLuminance() ?? 0).ToList();
+    public List<double> GetIntensities((double H, double S, double V)? HSVWeights = null)
+        => Pixels.Select(p => p?.GetLuminance(HSVWeights ?? (1, 1, 1)) ?? 0).ToList();
 
     public PixelImage(IMagickImage<ushort> originalImage)
     {

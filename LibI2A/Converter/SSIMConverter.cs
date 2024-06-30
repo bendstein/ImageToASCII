@@ -75,7 +75,7 @@ public class SSIMConverter : IImageToASCIIConverter
             }
 
             //Get glyph that is most structurally similar to this tile
-            var glyph = store.GetOrCalculateAndStoreSoln([..tile.Intensities],
+            var glyph = store.GetOrCalculateAndStoreSoln([..tile.GetIntensities()],
                 () =>
                 {
                     SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
@@ -249,7 +249,7 @@ public class SSIMConverter : IImageToASCIIConverter
             //Print best match
             Write(glyph, combined);
 
-            var intensities = tile.Intensities.ToArray();
+            var intensities = tile.GetIntensities().ToArray();
 
             yield return (intensities, glyphs.Select(g => (g.Key, g.Value)).ToArray());
         }

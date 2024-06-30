@@ -8,6 +8,8 @@ public class SSIMCalculator : ISSIMCalculator
 
     private readonly Options options;
 
+    private static readonly (double H, double S, double V) HSV_WEIGHTS = (1, 1.2d, 1);
+
     public SSIMCalculator(ISSIMStore store, Action<Options>? configure = null)
     {
         this.store = store;
@@ -38,10 +40,10 @@ public class SSIMCalculator : ISSIMCalculator
 
             List<double> local_ssims = [];
 
-            //Compare each pixel
+            //Compare each pixel. Apply weights to HSV components of the pixel for the calculation
             var intensities = (
-                a: image_a.Intensities,
-                b: image_b.Intensities
+                a: image_a.GetIntensities(HSV_WEIGHTS),
+                b: image_b.GetIntensities(HSV_WEIGHTS)
             );
 
             //Get gaussian-weighted mean intensity of each image (luminance), scaled by gaussian
@@ -123,8 +125,8 @@ public class SSIMCalculator : ISSIMCalculator
             //Calculate SSIM for subtile, and weight by gaussian
             if (subtile_a != null && subtile_b != null)
             {
-                var intensities_a = image_a.Intensities.ToArray();
-                var intensities_b = image_b.Intensities.ToArray();
+                var intensities_a = image_a.GetIntensities().ToArray();
+                var intensities_b = image_b.GetIntensities().ToArray();
 
                 ssim_sum += store.GetOrCalculateAndStore(intensities_a, intensities_b,
                     () => W(t) * CalculateSubtile(subtile_a, subtile_b));
