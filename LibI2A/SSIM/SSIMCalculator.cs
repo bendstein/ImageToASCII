@@ -78,12 +78,17 @@ public class SSIMCalculator : ISSIMCalculator
             var c1 = options.Constants.K1;
             var c2 = options.Constants.K2;
 
+            //Weight mean, std dev, and covar respectively
+            var w1 = options.Weights.W1;
+            var w2 = options.Weights.W2;
+            var w3 = options.Weights.W3;
+
             //Calculate local SSIM
-            var ssim = (((2 * mean.a * mean.b) + c1)
-                * ((2 * covar) + c2))
+            var ssim = ((w1 * (2 * mean.a * mean.b) + c1)
+                * (w3 * (2 * covar) + c2))
                 /
-                (((Math.Pow(mean.a, 2) + Math.Pow(mean.b, 2)) + c1)
-                * ((Math.Pow(stddev.a, 2) + Math.Pow(stddev.b, 2)) + c2));
+                ((w1 * (Math.Pow(mean.a, 2) + Math.Pow(mean.b, 2)) + c1)
+                * (w2 * (Math.Pow(stddev.a, 2) + Math.Pow(stddev.b, 2)) + c2));
 
             return ssim;
         }
@@ -173,5 +178,7 @@ public class SSIMCalculator : ISSIMCalculator
         public (double K1, double K2) Constants = (0.001d, 0.005d);
 
         public double GaussianStdDev { get; set; } = 1.5d;
+
+        public (double W1, double W2, double W3) Weights = (1d, 2d, 1d);
     }
 }

@@ -185,8 +185,6 @@ try
             opts.InvertFont = config.InvertFont;
         });
 
-        List<Thread> write_threads = [];
-
         foreach (var file in process_files)
         {
             if (stop > 0)
@@ -196,45 +194,13 @@ try
 
             await using var fs = new FileStream(file, FileMode.Open, FileAccess.Read);
 
-            if (!Directory.Exists("log"))
-                Directory.CreateDirectory("log");
-
-            await using var ls = new FileStream($"log/{Path.GetFileNameWithoutExtension(file)}.log", FileMode.OpenOrCreate, FileAccess.ReadWrite);
-
-            Log($"View image progress at log/{Path.GetFileNameWithoutExtension(file)}.log.");
-            
-            using var lsw = new StreamWriter(ls);
-
-            foreach(var solution in converter.ProcessImage(fs, lsw))
+            foreach(var solution in converter.ProcessImage(fs))
             {
                 if (stop > 0)
                     break;
 
-                //Write should be independent of processing
-                Thread write_thread = new(() =>
-                {
-                    lock(ppsw)
-                        ppsw.WriteLine($"{string.Join(',', solution.intensities.Select(i => InternalUtils.Round(i, DictionarySSIMStore.PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
-                });
-                write_thread.Start();
-                write_threads.Add(write_thread);
-
-                //Every once and awhile, cull complete threads
-                if (write_threads.Count > 1000)
-                    lock (write_threads)
-                        write_threads.RemoveAll(t => t.ThreadState == ThreadState.Stopped);
+                ppsw.WriteLine($"{string.Join(',', solution.intensities.Select(i => InternalUtils.Round(i, DictionarySSIMStore.PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
             }
-        }
-
-        //Wait for all write threads to complete
-        Log($"Waiting for all preprocessing threads to finish.");
-
-        foreach (var thread in write_threads)
-        {
-            if (stop > 1)
-                return;
-
-            thread.Join();
         }
 
         if (stop > 0)

@@ -1,5 +1,6 @@
 ﻿using ImageMagick;
 using LibI2A.SSIM;
+using Pastel;
 
 namespace LibI2A.Converter;
 public class SSIMConverter : IImageToASCIIConverter
@@ -130,12 +131,29 @@ public class SSIMConverter : IImageToASCIIConverter
                 writer.WriteLine();
         }
 
-        void Write(string s)
+        void Write(string s, uint? color = null)
         {
             if (writer == null)
-                Console.Write(s);
+            {
+                string cs = s;
+
+                if(color.HasValue)
+                {
+                    System.Drawing.Color? c = System.Drawing.Color.FromArgb(
+                        (int)(color >> 24) & 0xFF,
+                        (int)(color >> 16) & 0xFF,
+                        (int)(color >> 8) & 0xFF,
+                        (int)color & 0xFF);
+
+                    cs = cs.Pastel(c.Value);
+                }
+
+                Console.Write(cs);
+            }
             else
+            {
                 writer.Write(s);
+            }
         }
 
         using var image_collection = new MagickImageCollection(input);
@@ -157,6 +175,28 @@ public class SSIMConverter : IImageToASCIIConverter
             //Line break in console
             if (n > 0 && (n % width) == 0)
                 WriteLine();
+
+            //Get average color of tile
+            var colors = tile.Pixels
+                .Where(color => color != null)
+                .Select(color => InternalUtils.ARGBToAHSV((
+                    InternalUtils.ScaleUShort(color!.A),
+                    InternalUtils.ScaleUShort(color.R),
+                    InternalUtils.ScaleUShort(color.G),
+                    InternalUtils.ScaleUShort(color.B))))
+                .ToList();
+
+            uint combined = 0;
+
+            if (colors.Count > 0)
+            {
+                var sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
+                var avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
+                    sums.h / colors.Count,
+                    sums.s / colors.Count,
+                    sums.v / colors.Count);
+                combined = InternalUtils.ToUInt(InternalUtils.AHSVToARGB(avgs));
+            }
 
             //Get all glyphs and values
             (string primary, Dictionary<string, double> similar) getGlyphs(Dictionary<string, PixelImage> glyphs)
@@ -207,7 +247,7 @@ public class SSIMConverter : IImageToASCIIConverter
             //(var inv_glyph, var inv_glyphs) = getGlyphs(glyph_images_inv);
 
             //Print best match
-            Write(glyph);
+            Write(glyph, combined);
 
             var intensities = tile.Intensities.ToArray();
 
