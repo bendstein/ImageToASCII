@@ -9,7 +9,7 @@ public interface IImageToASCIIConverter
 
     public IEnumerable<(string glyph, uint? color)> ConvertImage(string path)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite);
         return ConvertImage(fs);
     }
 

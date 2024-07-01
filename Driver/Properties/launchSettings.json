@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "Driver": {
-      "commandName": "Project",
-      "commandLineArgs": "\"C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\Training 2\" \r\n--TileSize 4 \r\n--Subdivide 0 \r\n--ParallelCalculate 18\r\n--nocolor \r\n--model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\model\\model.nn\r\n--method NN\r\n--training\r\n--preprocess C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\model\\pp.txt\r\n---preprocessed C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\model\\preprocessed"
-    }
-  }
-}

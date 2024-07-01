@@ -13,7 +13,7 @@ public class NeuralNetConverter(NeuralNetConverter.Model model) : IImageToASCIIC
         throw new NotImplementedException();
     }
 
-    public static bool Train(TrainingSet training_set, Action<string, bool> log, [NotNullWhen(true)] out Model? model, [NotNullWhen(false)] out string? error)
+    public static bool Train(TrainingSet training_set, Action<string, bool> log, Action<DebugData> log_data, [NotNullWhen(true)] out Model? model, [NotNullWhen(false)] out string? error)
     {
         bool Error(string message, out string error)
         {
@@ -181,7 +181,7 @@ public class NeuralNetConverter(NeuralNetConverter.Model model) : IImageToASCIIC
                     for (int i = 0; i < model.Weights.GetLength(0) - 1; i++)
                         model.Weights[i, j, k] -= learning_rate * gradient * layers[i, k];
 
-                    //Updat bias
+                    //Update bias
                     model.Weights[model.Weights.GetLength(0) - 1, j, k] -= learning_rate * gradient;
 
                     //Hold on to gradient to propagate it backwards
@@ -189,6 +189,8 @@ public class NeuralNetConverter(NeuralNetConverter.Model model) : IImageToASCIIC
                 }
 
                 previous_gradients = current_gradients;
+
+                log_data(new DebugData(model));
             }
 
             log($"Finished training on element {data_ndx}.", false);
@@ -318,4 +320,8 @@ public class NeuralNetConverter(NeuralNetConverter.Model model) : IImageToASCIIC
         public string PredictedGlyph { get; set; } = string.Empty;
     }
 
+    public class DebugData(Model Model)
+    {
+        public Model Model { get; set; } = Model;
+    }
 }

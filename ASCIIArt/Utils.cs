@@ -1,5 +1,7 @@
 ﻿namespace Driver;
 
+using Spectre.Console;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 public static partial class ConsoleUtils
@@ -54,5 +56,21 @@ public static partial class ConsoleUtils
         }
 
         return false;
+    }
+}
+
+public static class Extensions
+{
+    public static bool TryGetLayout(this Layout @this, string layout_name, [NotNullWhen(true)] out Layout? layout)
+    {
+        layout = null;
+
+        try
+        {
+            layout = @this[layout_name];
+        }
+        catch { }
+
+        return layout != null;
     }
 }

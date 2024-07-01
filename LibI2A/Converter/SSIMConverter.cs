@@ -121,14 +121,14 @@ public class SSIMConverter : IImageToASCIIConverter
         yield break;
     }
 
-    public IEnumerable<(double[] intensities, (string glyph, double ssim)[] scores)> ProcessImage(Stream input, StreamWriter? writer = null)
+    public IEnumerable<(double[] intensities, (string glyph, double ssim)[] scores)> ProcessImage(Stream input, Action<string, uint?>? writer = null)
     {
         void WriteLine()
         {
             if (writer == null)
                 Console.WriteLine();
             else
-                writer.WriteLine();
+                writer.Invoke(Environment.NewLine, null);
         }
 
         void Write(string s, uint? color = null)
@@ -152,7 +152,7 @@ public class SSIMConverter : IImageToASCIIConverter
             }
             else
             {
-                writer.Write(s);
+                writer.Invoke(s, color);
             }
         }
 

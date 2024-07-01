@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ASCIIArt": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\Training\r\n--mode train"
+    }
+  }
+}
