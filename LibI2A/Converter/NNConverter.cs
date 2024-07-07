@@ -2,6 +2,7 @@
 using LibI2A.Common;
 using MathNet.Numerics.LinearAlgebra.Double;
 using OneOf;
+using System.Linq;
 using System.Text;
 
 namespace LibI2A.Converter;
@@ -326,17 +327,11 @@ public class NNConverter : IImageToASCIIConverter
                     DenseMatrix weights = model.Weights[l];
                     DenseVector biases = model.Biases[l];
 
-                    for (int i = 0; i < weights.RowCount; i++)
-                    {
-                        //Update bias, using sum of gradients as gradient
-                        biases[i] -= learning_rate * bias_gradient[i];
+                    //Update biases
+                    biases -= learning_rate * bias_gradient;
 
-                        //Update weight
-                        for (int j = 0; j < weights.ColumnCount; j++)
-                        {
-                            weights[i, j] -= learning_rate * gradient[i, j];
-                        }
-                    }
+                    //Update weights
+                    weights -= learning_rate * gradient;
                 }
 
                 token.ThrowIfCancellationRequested();
@@ -417,12 +412,16 @@ public class NNConverter : IImageToASCIIConverter
             DenseVector neurons = activations[l + 1];
 
             DenseVector[] layer_gradients = new DenseVector[weights.RowCount];
-            DenseVector layer_errors = new(weights.RowCount);
             DenseVector layer_bias = new(weights.RowCount);
 
-            DenseVector? error_term = null;
+            DenseVector error_term;
 
-            if (l < all_gradients.Length - 1)
+            if(l == all_gradients.Length - 1)
+            {
+                //Gradient of cross-entropy loss wrt softmax activation simplifies to predicted - expected
+                error_term = neurons - ssims;
+            }
+            else
             {
                 //Get weights and error terms for next layer
                 DenseMatrix next_weights = model.Weights[l + 1];
@@ -430,42 +429,17 @@ public class NNConverter : IImageToASCIIConverter
 
                 //Using chain rule, error term is the transpose of the next layer's weights times it's error term,
                 //times the derivative of ReLU
-                error_term = (DenseVector?)next_weights.TransposeThisAndMultiply(next_errors)
+                error_term = (DenseVector)next_weights.TransposeThisAndMultiply(next_errors)
                     .PointwiseMultiply(neurons.Map(n => n <= 0 ? model.Alpha : 1));
             }
 
-            //For each output neuron
-            for (int i = 0; i < weights.RowCount; i++)
-            {
-                DenseVector row_gradients = DenseVector.OfArray(new double[weights.ColumnCount]);
-                double row_error = 0d;
-                MathNet.Numerics.LinearAlgebra.Vector<double> weights_row = weights.Row(i);
+            all_errors[l] = error_term;
 
-                //Last layer
-                if (l == all_gradients.Length - 1)
-                {
-                    //Gradient of cross-entropy loss wrt softmax activation simplifies to predicted - expected
-                    row_error = neurons[i] - ssims[i];
-                }
-                //Inner layer
-                else
-                {
-                    //Row error is the ith element of the error term
-                    row_error = error_term![i];
-                }
+            //Grad of loss wrt bias is just error
+            all_biases[l] = DenseVector.OfArray(error_term.Select(n => double.Clamp(n, GRADIENT_MIN, GRADIENT_MAX)).ToArray());
 
-                layer_errors[i] = row_error;
-
-                //Grad of loss wrt bias is just error
-                layer_bias[i] = double.Clamp(row_error, GRADIENT_MIN, GRADIENT_MAX);
-
-                //Grad of loss wrt weights is error * prev activations
-                layer_gradients[i] = (DenseVector)(row_error * activations[l]).Map(n => double.Clamp(n, GRADIENT_MIN, GRADIENT_MAX));
-            }
-
-            all_gradients[l] = DenseMatrix.OfRowVectors(layer_gradients);
-            all_errors[l] = layer_errors;
-            all_biases[l] = layer_bias;
+            //Grad of loss wrt weights is error * prev activations transpose (chain rule)
+            all_gradients[l] = (DenseMatrix)(error_term.ToColumnMatrix() * activations[l].ToRowMatrix()).Map(n => double.Clamp(n, GRADIENT_MIN, GRADIENT_MAX));
         }
 
         return (all_gradients, all_biases);
@@ -805,7 +779,18 @@ public class NNConverter : IImageToASCIIConverter
         /// <summary>
         /// The SSIMs, transformed to be a probability distribution
         /// </summary>
-        public double[] NormalizedSSIMs => [.. NormalizedSoftmax(DenseVector.OfArray(SSIMs))];
+        public double[] NormalizedSSIMs
+        {
+            get
+            {
+                var sum = SSIMs.Sum();
+
+                if (sum == 0)
+                    return SSIMs;
+
+                return SSIMs.Select(s => s / sum).ToArray();
+            }
+        }
     }
 
     /// <summary>

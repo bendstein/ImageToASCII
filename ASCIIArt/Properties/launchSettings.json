@@ -2,7 +2,7 @@
   "profiles": {
     "I2A": {
       "commandName": "Project",
-      "commandLineArgs": "C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\Training \r\n--mode train \r\n--threads 1\r\n--preprocessed-path C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\preprocessed \r\n--model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\model\\model.nn \r\n--learning-rate 0.0005 \r\n--learning-rate-decay 0 \r\n--alpha 0.005 \r\n--hidden-layers 4 \r\n--hidden-neurons 1024 \r\n--batch-size 4"
+      "commandLineArgs": "C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\RandomImageGenerator\\bin\\Release\\net8.0\\out\r\n--mode train\r\n--threads 1\r\n--model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\model\\model.nn \r\n--preprocess C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\preprocessed\\preprocessed-reduced.txt\r\n--glyphs glyphs-reduced.txt\r\n--learning-rate 0.5 \r\n--learning-rate-decay 0 \r\n--alpha 0.005 \r\n--hidden-layers 1\r\n--hidden-neurons 2\r\n--batch-size 1\r\n--tile-size 2\r\n--subdivide 0"
     }
   }
 }

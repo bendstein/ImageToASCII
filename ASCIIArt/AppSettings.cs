@@ -104,15 +104,10 @@ public class AppSettings : CommandSettings
         set => MethodString = value.ToString();
     }
 
-    [CommandOption("--preprocess-path")]
+    [CommandOption("--preprocess")]
     [DefaultValue(PREPROCESS_PATH_DEFAULT)]
-    [Description("Output results to this file in preprocessing mode.")]
+    [Description("Pull preprocessed data from this file/directory when in training mode. Output results to this file in preprocessing mode.")]
     public string PreprocessPath { get; set; } = PREPROCESS_PATH_DEFAULT;
-
-    [CommandOption("--preprocessed-path")]
-    [DefaultValue(PREPROCESS_PATH_DEFAULT)]
-    [Description("Pull preprocessed data from this file/directory when in training mode.")]
-    public string PreprocessedPath { get; set; } = PREPROCESS_PATH_DEFAULT;
 
     [CommandOption("--shuffle")]
     [DefaultValue(false)]

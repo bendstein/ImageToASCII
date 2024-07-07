@@ -21,17 +21,16 @@ A component using a neural net is also being worked on, since comparing SSIMs be
     - preprocess - Collect SSIM data for later training
 - --model: If training, or using the trained model method, this is the path to the model
 - --threads: The max degree of parallelism when calculating SSIMs or training a model
+- --preprocess: When pre-processing, write data to this path. When training, load pre-processed data from this path.
 
 ### Pre-processing Arguments
 Arguments that only apply for --mode preprocess
 
-- --preprocess-path: When pre-processing, write data to this path
 - --shuffle: (flag) Shuffle the ordering of pre-processed data. Take a LONG time on large datasets.
 
 ### Training Arguments
 Arguments that only apply for --mode train
 
-- --preprocessed-path: The path to the file/directory containing pre-processed SSIM data for training
 - --learning-rate: Coefficient to multiply gradients by when updating model weights
 - --learning-rate-decay: Learning rate decays exponentially at this rate
 - --alpha: Alpha value to use for Leaky ReLU

@@ -142,3 +142,6 @@ Driver/Training 2/
 preprocessed-2-original.txt
 preprocessed/preprocessed.txt
 RandomImageGenerator/prompts.json
+model/model.nn
+ASCIIArt/glyphs-reduced.txt
+preprocessed/preprocessed-reduced.txt

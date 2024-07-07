@@ -225,13 +225,13 @@ public class App : AsyncCommand<AppSettings>
                         token.ThrowIfCancellationRequested();
 
                         //Train
-                        IEnumerable<NNConverter.Input> preprocessed = LoadPreprocessed(settings.PreprocessedPath, glyphs, settings.Shuffle)
+                        IEnumerable<NNConverter.Input> training_input = LoadPreprocessed(settings.PreprocessPath, glyphs, settings.Shuffle)
                             .Where(item => item.Intensities.Length == settings.TileSize * settings.TileSize
                                 && item.SSIMs.Length == model.Glyphs.Length);
 
                         NNConverter.TrainingSet training_set = new()
                         {
-                            Input = preprocessed,
+                            Input = training_input,
                             LearningRate = settings.LearningRate,
                             LearningDecay = settings.LearningDecay,
                             Threads = settings.Threads,
@@ -241,6 +241,8 @@ public class App : AsyncCommand<AppSettings>
                         //Save the model to a file
                         async Task SaveModelAsync(NNConverter.Model model, CancellationToken token)
                         {
+                            token.ThrowIfCancellationRequested();
+
                             if (!string.IsNullOrWhiteSpace(settings.Model))
                             {
                                 string? model_dir = Path.GetDirectoryName(settings.Model);
@@ -250,10 +252,14 @@ public class App : AsyncCommand<AppSettings>
                                     _ = Directory.CreateDirectory(model_dir);
                                 }
 
-                                //Log($"Writing model to {settings.Model}.");
+                                token.ThrowIfCancellationRequested();
+
+                                //Don't cancel until after write is complete
                                 await using FileStream fs = new(settings.Model, FileMode.Create, FileAccess.ReadWrite);
                                 byte[] model_bytes = model.ToBytes();
-                                await fs.WriteAsync(model_bytes, token);
+                                await fs.WriteAsync(model_bytes, CancellationToken.None);
+
+                                token.ThrowIfCancellationRequested();
                             }
                         }
 
