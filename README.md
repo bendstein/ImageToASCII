@@ -78,3 +78,7 @@ The following is an example of training a model on the pre-processed image data:
 
 ## TODO
 - Try to make neural net actually work
+
+## Random Image Generator
+
+This component is there to connect to a Fooocus instance to generate images to train the ImageToASCII neural net on, once that works.
