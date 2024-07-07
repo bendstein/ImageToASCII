@@ -325,18 +325,6 @@ public class NNConverter : IImageToASCIIConverter
                 //Update weights and biases using Adam
                 UpdateAdamWeights(adam, model, average_gradients, average_bias_gradients, training_set.Lambda, epoch);
 
-                ////Update weights and biases
-                //for (int l = average_gradients.Length - 1; l >= 0; l--)
-                //{
-                //    token.ThrowIfCancellationRequested();
-
-                //    //Update biases
-                //    model.Biases[l] -= learning_rate * average_bias_gradients[l];
-
-                //    //Update weights (w/ L2 Regularization)
-                //    model.Weights[l] -= learning_rate * (average_gradients[l] + (training_set.Lambda * model.Weights[l]));
-                //}
-
                 token.ThrowIfCancellationRequested();
 
                 //Invoke callback on batch complete

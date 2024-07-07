@@ -5,11 +5,13 @@ public class PromptGenerator
 
     public Dictionary<string, string[]> Args { get; set; } = [];
 
-    public string GeneratePrompt(Random random)
+    public Style[] Styles { get; set; } = [];
+
+    public (string prompt, string model, string[] style) GeneratePrompt(Random random)
     {
         if (Templates.Length == 0)
         {
-            return string.Empty;
+            return (string.Empty, string.Empty, []);
         }
 
         Template template = Templates[random.Next(Templates.Length)];
@@ -27,7 +29,9 @@ public class PromptGenerator
             return string.Empty;
         }).ToArray();
 
-        return string.Format(template.Content, arguments);
+        Style style = Styles[random.Next(Styles.Length)];
+
+        return (string.Format(template.Content, arguments), style.Model, style.Styles);
     }
 }
 
@@ -36,4 +40,11 @@ public class Template
     public string Content { get; set; } = string.Empty;
 
     public string[] Args { get; set; } = [];
+}
+
+public class Style
+{
+    public string Model { get; set; } = string.Empty;
+
+    public string[] Styles { get; set; } = [];
 }

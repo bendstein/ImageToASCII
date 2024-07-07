@@ -2,7 +2,7 @@
   "profiles": {
     "RandomImageGenerator": {
       "commandName": "Project",
-      "commandLineArgs": "http://192.168.0.212:8888\r\n--n 50\r\n--model \"autismmixSDXL_autismmixDPO.safetensors\"\r\n--styles \"Adorable Kawaii\""
+      "commandLineArgs": "http://192.168.0.212:8888\r\n--n 1"
     }
   }
 }

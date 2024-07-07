@@ -55,25 +55,18 @@ await client.PingAsync();
 Console.WriteLine($"Successfully pinged {argd["--url"]}.");
 
 //Get model and style
-string model = argd.TryGetValue("--model", out string? mdl) ? mdl : string.Empty;
-string[] styles = (argd.TryGetValue("--styles", out string? sty) ? sty : string.Empty)
-    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+string default_model;
+string[] default_styles;
 
-if (string.IsNullOrWhiteSpace(model))
-{
-    AllModelNamesResponse all_models = await client.AllModelsAsync();
-    model = all_models.Model_filenames.FirstOrDefault() ?? string.Empty;
-}
+AllModelNamesResponse all_models = await client.AllModelsAsync();
+default_model = all_models.Model_filenames.FirstOrDefault() ?? string.Empty;
 
-if (styles.Length == 0)
-{
-    ICollection<string> all_styles = await client.StylesAsync();
+ICollection<string> all_styles = await client.StylesAsync();
 
-    styles = all_styles.Select(s => (s, Random.Shared.NextDouble()))
-        .Where(s => s.Item2 > 0.95)
-        .Select(s => s.s)
-        .ToArray();
-}
+default_styles = all_styles.Select(s => (s, Random.Shared.NextDouble()))
+    .Where(s => s.Item2 > 0.95)
+    .Select(s => s.s)
+    .ToArray();
 
 string out_dir = $"out/{DateTime.Now:MM-dd-yyyy-HH-mm}";
 if (!Directory.Exists(out_dir))
@@ -84,20 +77,20 @@ if (!Directory.Exists(out_dir))
 //Generate n images
 for (int i = 0; i < n; i++)
 {
-    string prompt = prompt_generator.GeneratePrompt(Random.Shared);
+    (string prompt, string model, string[] styles) = prompt_generator.GeneratePrompt(Random.Shared);
     Console.WriteLine($"Prompt {i + 1}: {prompt}");
 
     IEnumerable<Response6> response = await client.TextToImageWithIpAsync(new Anonymous6(), "application/json", new()
     {
         Prompt = prompt,
-        Style_selections = styles,
+        Style_selections = styles.Length == 0? default_styles : styles,
         Performance_selection = PerformanceSelection.Speed,
         Aspect_ratios_selection = "896*1152",
         Image_number = 1,
         Image_seed = -1,
         Guidance_scale = 4,
         Sharpness = 2,
-        Base_model_name = model,
+        Base_model_name = string.IsNullOrWhiteSpace(model)? default_model : model,
         Refiner_model_name = "None",
         Refiner_switch = 0.5d,
         Loras = [],
