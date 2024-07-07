@@ -1,7 +1,7 @@
-﻿using System.ComponentModel;
-using Spectre.Console.Cli;
+﻿using Spectre.Console.Cli;
+using System.ComponentModel;
 
-namespace ASCIIArt;
+namespace I2A;
 public class AppSettings : CommandSettings
 {
     public const string
@@ -61,14 +61,12 @@ public class AppSettings : CommandSettings
             int?[] split = ClampString.Split(',', StringSplitOptions.TrimEntries)
                 .Select(s =>
                 {
-                    if (int.TryParse(s, out var i) && i >= 0)
-                        return (int?)i;
-                    return null;
+                    return int.TryParse(s, out int i) && i >= 0 ? (int?)i : null;
                 }).ToArray();
 
-            return (split.Length > 0? split[0] : null, split.Length > 1? split[1] : null);
+            return (split.Length > 0 ? split[0] : null, split.Length > 1 ? split[1] : null);
         }
-        set => ClampString = $"{(value.w.HasValue? value.w.ToString() : "")},{(value.h.HasValue ? value.h.ToString() : "")}";
+        set => ClampString = $"{(value.w.HasValue ? value.w.ToString() : "")},{(value.h.HasValue ? value.h.ToString() : "")}";
     }
 
     [CommandOption("-m|--model")]
@@ -78,8 +76,8 @@ public class AppSettings : CommandSettings
 
     [CommandOption("--mode")]
     [DefaultValue(MODE_DEFAULT)]
-    [Description("render: Render the image as ASCII; " 
-        + "train: Train a model to predict the appropriate glyph for a tile; " 
+    [Description("render: Render the image as ASCII; "
+        + "train: Train a model to predict the appropriate glyph for a tile; "
         + "preprocess: Collect SSIM data for later training.")]
     public string ModeString { get; set; } = string.Empty;
 
@@ -94,7 +92,7 @@ public class AppSettings : CommandSettings
     [Description("The maximum number of parallel threads to use while calculating SSIM between a tile and glyphs.")]
     public int Threads { get; set; } = THREADS_DEFAULT;
 
-    public string MethodString { get; set; }= string.Empty;
+    public string MethodString { get; set; } = string.Empty;
 
     [CommandOption("--method")]
     [DefaultValue(METHOD_DEFAULT)]
@@ -145,6 +143,11 @@ public class AppSettings : CommandSettings
     [DefaultValue(0)]
     [Description("The number of neurons each hidden layer will have.")]
     public int HiddenNeurons { get; set; } = 0;
+
+    [CommandOption("--batch-size")]
+    [DefaultValue(64)]
+    [Description("The size of the mini-batches to train the neural net on.")]
+    public int BatchSize { get; set; } = 64;
 }
 
 public enum Mode

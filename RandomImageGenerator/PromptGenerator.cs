@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace RandomImageGenerator;
+﻿namespace RandomImageGenerator;
 public class PromptGenerator
 {
     public Template[] Templates { get; set; } = [];
@@ -14,16 +8,20 @@ public class PromptGenerator
     public string GeneratePrompt(Random random)
     {
         if (Templates.Length == 0)
-            return string.Empty;
-
-        var template = Templates[random.Next(Templates.Length)];
-
-        var arguments = template.Args.Select(arg_type =>
         {
-            if (Args.TryGetValue(arg_type, out var arg_values))
+            return string.Empty;
+        }
+
+        Template template = Templates[random.Next(Templates.Length)];
+
+        string[] arguments = template.Args.Select(arg_type =>
+        {
+            if (Args.TryGetValue(arg_type, out string[]? arg_values))
             {
                 if (arg_values.Length > 0)
+                {
                     return arg_values[random.Next(arg_values.Length)];
+                }
             }
 
             return string.Empty;

@@ -1,21 +1,44 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Text;
-using ImageMagick;
+﻿using ImageMagick;
+using LibI2A.Common;
 using MathNet.Numerics.LinearAlgebra.Double;
+using OneOf;
+using System.Text;
 
 namespace LibI2A.Converter;
 
+/// <summary>
+/// Allows the conversion of an Image to ASCII glyphs
+/// using a trained neural net.
+/// </summary>
 public class NNConverter : IImageToASCIIConverter
 {
-    private const double 
-        EPS = 0.00001d,
-        GRADIENT_MAX = 2d,
-        GRADIENT_MIN = -2d;
+    /// <summary>
+    /// Epsilon for cross-entropy loss to prevent log(0)
+    /// </summary>
+    private const double EPS = 0.00001d;
 
+    /// <summary>
+    /// Clamp gradients to this range
+    /// </summary>
+    private const double
+        GRADIENT_MAX = 10d,
+        GRADIENT_MIN = -10d;
+
+    /// <summary>
+    /// The trained neural net to use for predictions
+    /// </summary>
     private readonly Model model;
 
+    /// <summary>
+    /// Options to modify image => glyph conversion
+    /// </summary>
     private readonly Options options;
 
+    /// <summary>
+    /// Create a new converter from a trained model
+    /// </summary>
+    /// <param name="model">The trained neural net to use for predictions</param>
+    /// <param name="configure">A delegate to configure the converter</param>
     public NNConverter(Model model, Action<Options>? configure = null)
     {
         this.model = model;
@@ -24,75 +47,334 @@ public class NNConverter : IImageToASCIIConverter
         this.options = options;
     }
 
+    /// <summary>
+    /// Create a new converter from a trained model
+    /// </summary>
+    /// <param name="model">The trained neural net to use for predictions</param>
+    /// <param name="options">Options to modify image => glyph conversion</param>
     public NNConverter(Model model, Options options)
     {
         this.model = model;
         this.options = options;
     }
 
+    /// <summary>
+    /// Convert the image to ASCII glyphs, using <see cref="model"/> to predict the
+    /// corresponding glyph for each tile of the image.
+    /// </summary>
+    /// <param name="input">A stream containing the image to convert</param>
+    /// <returns>An IEnumerable of ASCII glyphs and their colors.</returns>
     public IEnumerable<(string glyph, uint? color)> ConvertImage(Stream input)
     {
-        using var image_collection = new MagickImageCollection(input);
+        using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
-        var image = image_collection.First();
+        IMagickImage<ushort> image = image_collection.First();
 
         //Break images into windows
-        var pixel_image = new PixelImage(image);
+        PixelImage pixel_image = new(image);
 
         int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
         int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
 
         int n = 0;
 
-        foreach (var tile in pixel_image.Tiles(options.FontSize, options.FontSize))
+        foreach (PixelImage tile in pixel_image.Tiles(options.FontSize, options.FontSize))
         {
             if (n > 0 && (n % width) == 0)
+            {
                 yield return (Environment.NewLine, null);
+            }
 
             //Get average color of tile
-            var colors = tile.Pixels
+            List<(uint a, double h, double s, double v)> colors = tile.Pixels
                 .Where(color => color != null)
-                .Select(color => InternalUtils.ARGBToAHSV((
-                    InternalUtils.ScaleUShort(color!.A),
-                    InternalUtils.ScaleUShort(color.R),
-                    InternalUtils.ScaleUShort(color.G),
-                    InternalUtils.ScaleUShort(color.B))))
+                .Select(color => Utils.ARGBToAHSV((
+                    Utils.ScaleUShort(color!.A),
+                    Utils.ScaleUShort(color.R),
+                    Utils.ScaleUShort(color.G),
+                    Utils.ScaleUShort(color.B))))
                 .ToList();
 
             uint combined = 0;
 
             if (colors.Count > 0)
             {
-                var sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
-                var avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
+                (uint a, double h, double s, double v) sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
+                (uint, double, double, double) avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
                     sums.h / colors.Count,
                     sums.s / colors.Count,
                     sums.v / colors.Count);
-                combined = InternalUtils.ToUInt(InternalUtils.AHSVToARGB(avgs));
+                combined = Utils.ToUInt(Utils.AHSVToARGB(avgs));
             }
 
             //Predict the glyph that is most likely
-            string glyph = PredictGlyph(model, tile);
+            string glyph = PredictGlyph(tile);
 
-            yield return (glyph, options.NoColor ? null : combined);
+            yield return (glyph, combined);
             n++;
         }
 
         yield break;
     }
 
-    private string PredictGlyph(Model model, PixelImage tile)
+    /// <summary>
+    /// Predict the best-matching glyph for the tile
+    /// </summary>
+    /// <param name="tile"></param>
+    /// <returns></returns>
+    private string PredictGlyph(PixelImage tile)
     {
-        var neurons = DenseVector.OfArray([.. tile.GetIntensities()]);
+        DenseVector[] activations = PropagateForwards(model, new Input()
+        {
+            Intensities = [.. tile.GetIntensities()],
+        });
+
+        DenseVector output = activations[^1];
+
+        //Select glyph with highest probability
+        return output.Select((n, ndx) => (n, glyph: model.Glyphs[ndx]))
+            .MaxBy(pair => pair.n)
+            .glyph;
+    }
+
+    /// <summary>
+    /// Create a new neural net based on the given params, and train it.
+    /// </summary>
+    /// <param name="model_init_params">The params for the new neural net</param>
+    /// <param name="training_set">The data to train the model on</param>
+    /// <param name="log">A delegate to log messages</param>
+    /// <param name="on_batch_complete">Optional action to perform when a batch is completed</param>
+    /// <param name="token">A cancellation token to end the task early.</param>
+    /// <returns>Either the trained <see cref="Model"/>, or a <see cref="TrainingError"/>.</returns>
+    public static Task<OneOf<Model, TrainingError>> TrainAsync(ModelInitParams model_init_params, TrainingSet training_set,
+        Action<string, bool> log, Func<Model, CancellationToken, Task>? on_batch_complete = null, CancellationToken token = default)
+    {
+        return TrainAsync(new Model(model_init_params), training_set, log, on_batch_complete, token);
+    }
+
+    /// <summary>
+    /// Continue the training of an existing model.
+    /// </summary>
+    /// <param name="model_initial">The model to train.</param>
+    /// <param name="training_set">The data to train the model on</param>
+    /// <param name="Log">A delegate to log messages</param>
+    /// <param name="on_batch_complete">Optional action to perform when a batch is completed</param>
+    /// <param name="token">A cancellation token to end the task early.</param>
+    /// <returns>Either the trained <see cref="Model"/>, or a <see cref="TrainingError"/>.</returns>
+    public static async Task<OneOf<Model, TrainingError>> TrainAsync(Model model_initial, TrainingSet training_set,
+        Action<string, bool> log, Func<Model, CancellationToken, Task>? on_batch_complete = null, CancellationToken token = default)
+    {
+        void Log(string message, bool is_error = false) => log(message, is_error);
+
+        TrainingError Error(string message, Exception? ex = null)
+        {
+            Log(message, true);
+            return new TrainingError(message, ex);
+        }
+
+        if (model_initial.Glyphs.Length == 0)
+        {
+            return Error("No glyphs were provided.");
+        }
+
+        try
+        {
+            token.ThrowIfCancellationRequested();
+
+            IEnumerator<Input[]> batches = training_set.Input.Chunk(training_set.BatchSize).GetEnumerator();
+            Model model = model_initial;
+
+            for (int epoch = 0; batches.MoveNext(); epoch++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                Input[] batch = batches.Current;
+
+                //Get learning rate w/ exponential decay
+                double learning_rate = training_set.LearningRate * Math.Exp(-training_set.LearningDecay * epoch);
+
+                SemaphoreSlim tasks = new(training_set.Threads, training_set.Threads);
+
+                List<Task<(DenseVector[] activations, double loss)>> forward_propagation_results = [];
+
+                //Run batch through the neural net
+                foreach (Input? input in batch)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    //Wait until there's an available task
+                    await tasks.WaitAsync(token);
+
+                    //Run the example forward through the neural net
+                    forward_propagation_results.Add(Task.Run(() =>
+                    {
+                        try
+                        {
+                            token.ThrowIfCancellationRequested();
+
+                            DenseVector[] activations = PropagateForwards(model_initial, input);
+
+                            //Compare the output to the expected value
+                            DenseVector output = activations[^1];
+
+                            DenseVector ssims = DenseVector.OfArray(input.NormalizedSSIMs);
+
+                            //Calculate error using cross entropy loss
+                            double loss = ssims * output.Map(value => Math.Log(Math.Max(EPS, value)));
+
+                            token.ThrowIfCancellationRequested();
+
+                            return (activations, -loss);
+                        }
+                        finally
+                        {
+                            //Release handle so another task can use it
+                            _ = tasks.Release();
+                        }
+                    }, token));
+                }
+
+                token.ThrowIfCancellationRequested();
+
+                //Wait for all forward propagation tasks to complete
+                (DenseVector[] activations, double loss)[] batch_activations = await Task.WhenAll(forward_propagation_results);
+
+                token.ThrowIfCancellationRequested();
+
+                //Get average loss across batch
+                double avg_loss = batch_activations.Select(a => a.loss).Average();
+
+                Log($"Batch loss: {avg_loss}");
+
+                List<Task<(DenseMatrix[]? weights, DenseVector[]? biases)>> backward_propagation_results = [];
+
+                //Propagate batch backwards through the neural net
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    Input input = batch[i];
+                    DenseVector[] activations = batch_activations[i].activations;
+
+                    token.ThrowIfCancellationRequested();
+
+                    //Wait until there's an available task
+                    await tasks.WaitAsync(token);
+
+                    //Propagate example backwards through the neural net
+                    backward_propagation_results.Add(Task.Run(() =>
+                    {
+                        try
+                        {
+                            token.ThrowIfCancellationRequested();
+
+                            return PropagateBackwards(model, input, activations);
+                        }
+                        finally
+                        {
+                            //Release handle so another task can use it
+                            _ = tasks.Release();
+                        }
+                    }, token));
+                }
+
+                token.ThrowIfCancellationRequested();
+
+                //Wait for all backward propagation tasks to complete
+                (DenseMatrix[]? weights, DenseVector[]? biases)[] batch_gradients = await Task.WhenAll(backward_propagation_results);
+
+                token.ThrowIfCancellationRequested();
+
+                //Average gradients across all trials
+                List<(DenseMatrix[] weights, DenseVector[] biases)> nn_gradients = batch_gradients.Where(g => g.weights != null && g.biases != null).Select(g => (weights: g.weights!, biases: g.biases!)).ToList();
+                (DenseMatrix[] weights, DenseVector[] biases) first_trial_gradients = nn_gradients.First();
+                DenseMatrix[] average_gradients = new DenseMatrix[model_initial.Weights.Length];
+                DenseVector[] average_bias_gradients = new DenseVector[model_initial.Weights.Length];
+
+                for (int l = 0; l < model_initial.Weights.Length; l++)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    //Sum gradients from each trial
+                    DenseMatrix sum = new(first_trial_gradients.weights[l].RowCount, first_trial_gradients.weights[l].ColumnCount);
+                    DenseVector bias_sum = new(first_trial_gradients.biases[l].Count);
+
+                    foreach ((DenseMatrix[] weights, DenseVector[] biases) gradient in nn_gradients)
+                    {
+                        token.ThrowIfCancellationRequested();
+
+                        sum += gradient.weights[l];
+                        bias_sum += gradient.biases[l];
+                    }
+
+                    //Divide sum by count to get average
+                    sum = (DenseMatrix)(sum / nn_gradients.Count);
+                    bias_sum /= nn_gradients.Count;
+                    average_gradients[l] = sum;
+                    average_bias_gradients[l] = bias_sum;
+                }
+
+                token.ThrowIfCancellationRequested();
+
+                model = model_initial.Clone();
+
+                //Update weights and biases
+                for (int l = average_gradients.Length - 1; l >= 0; l--)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    DenseMatrix gradient = average_gradients[l];
+                    DenseVector bias_gradient = average_bias_gradients[l];
+                    DenseMatrix weights = model.Weights[l];
+                    DenseVector biases = model.Biases[l];
+
+                    for (int i = 0; i < weights.RowCount; i++)
+                    {
+                        //Update bias, using sum of gradients as gradient
+                        biases[i] -= learning_rate * bias_gradient[i];
+
+                        //Update weight
+                        for (int j = 0; j < weights.ColumnCount; j++)
+                        {
+                            weights[i, j] -= learning_rate * gradient[i, j];
+                        }
+                    }
+                }
+
+                token.ThrowIfCancellationRequested();
+
+                //Invoke callback on batch complete
+                await (on_batch_complete?.Invoke(model, token) ?? Task.CompletedTask);
+            }
+
+            //Return the trained model
+            return model;
+        }
+        catch (Exception e)
+        {
+            return Error(e.Message, e);
+        }
+    }
+
+    /// <summary>
+    /// Propagate the input forward through the neural net.
+    /// </summary>
+    /// <param name="model">The model to propagate through.</param>
+    /// <param name="input">The input.</param>
+    /// <returns>The activations from each layer of the neural net.</returns>
+    private static DenseVector[] PropagateForwards(Model model, Input input)
+    {
+        DenseVector neurons = DenseVector.OfArray(input.Intensities);
+
+        DenseVector[] activations = new DenseVector[model.Weights.Length + 1];
+        activations[0] = neurons;
 
         //For each layer, propagating forward
         for (int l = 0; l < model.Weights.Length; l++)
         {
-            var layer = model.Weights[l];
-            var bias = model.Biases[l];
+            DenseMatrix layer = model.Weights[l];
+            DenseVector bias = model.Biases[l];
 
             //Take dot product of weights and neurons, and add bias to get activation inputs
-            var product = (layer * neurons) + bias;
+            DenseVector product = (layer * neurons) + bias;
 
             if (l == model.Weights.Length - 1)
             {
@@ -107,309 +389,157 @@ public class NNConverter : IImageToASCIIConverter
 
             //Push values to previous and use for next layer
             neurons = product;
+            activations[l + 1] = neurons;
         }
 
-        //Select glyph with highest probability
-        return neurons.Select((n, ndx) => (n, glyph: model.Glyphs[ndx]))
-            .MaxBy(pair => pair.n)
-            .glyph;
+        return activations;
     }
 
-    public static bool Train(ModelInitParams model_init_params, TrainingSet training_set, Action<string, bool> log,
-        [NotNullWhen(true)] out Model? model, [NotNullWhen(false)] out string? error)
-        => Train(new Model(model_init_params), training_set, log, out model, out error);
-
-    public static bool Train(Model model_initial, TrainingSet training_set, Action<string, bool> log,
-        [NotNullWhen(true)] out Model? model, [NotNullWhen(false)] out string? error)
+    /// <summary>
+    /// Propagate backwards through the neural net, recomputing gradients.
+    /// </summary>
+    /// <param name="model">The model to propagate through.</param>
+    /// <param name="input">The input.</param>
+    /// <param name="activations">The activations from each layer of the neural net.</param>
+    /// <returns>The gradients for the weights and biases.</returns>
+    private static (DenseMatrix[]? weight_gradients, DenseVector[]? bias_gradients) PropagateBackwards(Model model, Input input, DenseVector[] activations)
     {
-        void Log(string message, bool is_error = false)
+        DenseVector ssims = DenseVector.OfArray(input.NormalizedSSIMs);
+
+        DenseMatrix[] all_gradients = new DenseMatrix[model.Weights.Length];
+        DenseVector[] all_errors = new DenseVector[model.Weights.Length];
+        DenseVector[] all_biases = new DenseVector[model.Weights.Length];
+
+        for (int l = all_gradients.Length - 1; l >= 0; l--)
         {
-            log(message, is_error);
-        }
+            //Calculate the partial derivative of loss wrt to the weights of layer l
+            DenseMatrix weights = model.Weights[l];
+            DenseVector neurons = activations[l + 1];
 
-        bool Error(string message, out string error)
-        {
-            Log(message, true);
-            error = message;
-            return false;
-        }
+            DenseVector[] layer_gradients = new DenseVector[weights.RowCount];
+            DenseVector layer_errors = new(weights.RowCount);
+            DenseVector layer_bias = new(weights.RowCount);
 
-        model = null;
-        error = null;
+            DenseVector? error_term = null;
 
-        if (model_initial.Glyphs.Length == 0)
-            return Error("No glyphs were provided.", out error);
-
-        //Learning rate w/ exponential decay
-        var learning_rate = training_set.LearningRate * Math.Exp(-training_set.LearningDecay * training_set.Epoch);
-        var batch_size = training_set.Input.Count();
-
-        if (batch_size == 0)
-            return Error("Cannot train on 0 examples.", out error);
-
-        var total_loss = 0d;
-
-        var batch_activations = new List<DenseVector[]?>();
-        foreach (var _ in training_set.Input)
-            batch_activations.Add(null);
-
-        SemaphoreSlim threads = new(training_set.Threads, training_set.Threads);
-
-        //Run examples through the neural net in parallel
-        List<Thread> forward_propagation_threads = training_set.Input.Select((input, input_index) => new Thread(() =>
-        {
-            try
+            if (l < all_gradients.Length - 1)
             {
-                var neurons = DenseVector.OfArray(input.Intensities);
+                //Get weights and error terms for next layer
+                DenseMatrix next_weights = model.Weights[l + 1];
+                DenseVector next_errors = all_errors[l + 1];
 
-                var activations = new DenseVector[model_initial.Weights.Length + 1];
-                activations[0] = neurons;
-
-                //For each layer, propagating forward
-                for (int l = 0; l < model_initial.Weights.Length; l++)
-                {
-                    var layer = model_initial.Weights[l];
-                    var bias = model_initial.Biases[l];
-
-                    //Take dot product of weights and neurons, and add bias to get activation inputs
-                    var product = (layer * neurons) + bias;
-
-                    if (l == model_initial.Weights.Length - 1)
-                    {
-                        //Apply output activation function (softmax)
-                        product = NormalizedSoftmax(product);
-                    }
-                    else
-                    {
-                        //Apply activation function (Leaky ReLU)
-                        product.MapInplace(value => (value < 0? model_initial.Alpha : 1) * value);
-                    }
-
-                    //Push values to previous and use for next layer
-                    neurons = product;
-                    activations[l + 1] = neurons;
-                }
-
-                var output = activations[^1];
-
-                var ssims = DenseVector.OfArray(input.NormalizedSSIMs);
-
-                //Calculate error using cross entropy loss
-                var loss = ssims * output.Map(value => Math.Log(Math.Max(EPS, value)));
-
-                lock(batch_activations)
-                {
-                    //Accumulate loss
-                    total_loss -= loss;
-
-                    //Record activations for back propagation
-                    batch_activations[input_index] = activations;
-                }
-            }
-            finally
-            {
-                threads.Release();
-            }
-        })).ToList();
-
-        //Run in parallel
-        foreach(var thread in forward_propagation_threads)
-        {
-            threads.Wait();
-            thread.Start();
-        }
-
-        //Wait for all threads to finish
-        foreach (var thread in forward_propagation_threads)
-            thread.Join();
-
-        //Get average loss across batch
-        var avg_loss = total_loss / batch_size;
-
-        Log($"Batch loss: {avg_loss}");
-
-        var batch_gradients = new List<(DenseMatrix[]? weights, DenseVector[]? biases)>();
-        foreach (var _ in training_set.Input)
-            batch_gradients.Add((null, null));
-
-        //Backpropagate
-        List<Thread> backward_propagation_threads = training_set.Input.Select((input, input_index) => new Thread(() =>
-        {
-            try
-            {
-                //Get corresponding activations
-                var activations = batch_activations[input_index];
-
-                if(activations != null)
-                {
-                    var ssims = DenseVector.OfArray(input.NormalizedSSIMs);
-
-                    var all_gradients = new DenseMatrix[model_initial.Weights.Length];
-                    var all_errors = new DenseVector[model_initial.Weights.Length];
-                    var all_biases = new DenseVector[model_initial.Weights.Length];
-
-                    for (int l = all_gradients.Length - 1; l >= 0; l--)
-                    {
-                        //Calculate the partial derivative of loss wrt to the weights of layer l
-                        var weights = model_initial.Weights[l];
-                        var neurons = activations[l + 1];
-
-                        var layer_gradients = new DenseVector[weights.RowCount];
-                        var layer_errors = new DenseVector(weights.RowCount);
-                        var layer_bias = new DenseVector(weights.RowCount);
-
-                        //For each output neuron
-                        for (int i = 0; i < weights.RowCount; i++)
-                        {
-                            var row_gradients = DenseVector.OfArray(new double[weights.ColumnCount]);
-                            double row_error = 0d;
-                            var weights_row = weights.Row(i);
-
-                            //Last layer
-                            if(l == all_gradients.Length - 1)
-                            {
-                                //Gradient of cross-entropy loss wrt softmax activation simplifies to predicted - expected
-                                row_error = neurons[i] - ssims[i];
-                            }
-                            //Inner layer
-                            else
-                            {
-                                //Get weights and error terms for next layer
-                                var next_weights = model_initial.Weights[l + 1];
-                                var next_errors = all_errors[l + 1];
-
-                                //Using chain rule, error term is the transpose of the next layer's weights times it's error term,
-                                //times the derivative of ReLU
-                                row_error = next_weights.TransposeThisAndMultiply(next_errors)
-                                    * neurons.Map(n => n <= 0? model_initial.Alpha : 1);
-                            }
-
-                            layer_errors[i] = row_error;
-
-                            //Grad of loss wrt bias is just error
-                            layer_bias[i] = double.Clamp(row_error, GRADIENT_MIN, GRADIENT_MAX);
-
-                            //Grad of loss wrt weights is error * prev activations
-                            layer_gradients[i] = (DenseVector)(row_error * activations[l]).Map(n => double.Clamp(n, GRADIENT_MIN, GRADIENT_MAX));
-                        }
-
-                        all_gradients[l] = DenseMatrix.OfRowVectors(layer_gradients);
-                        all_errors[l] = layer_errors;
-                        all_biases[l] = layer_bias;
-                    }
-
-                    lock(batch_gradients)
-                    {
-                        batch_gradients[input_index] = (all_gradients, all_biases);
-                    }
-                }
-            }
-            finally
-            {
-                threads.Release();
-            }
-        })).ToList();
-
-        //Run in parallel
-        foreach (var thread in backward_propagation_threads)
-        {
-            threads.Wait();
-            thread.Start();
-        }
-
-        //Wait for all threads to finish
-        foreach (var thread in backward_propagation_threads)
-            thread.Join();
-
-        //Average gradients across all trials
-        var nn_gradients = batch_gradients.Where(g => g.weights != null && g.biases != null).Select(g => (weights: g.weights!, biases: g.biases!)).ToList();
-        var first_trial_gradients = nn_gradients.First();
-        var average_gradients = new DenseMatrix[model_initial.Weights.Length];
-        var average_bias_gradients = new DenseVector[model_initial.Weights.Length];
-
-        for (int l = 0; l < model_initial.Weights.Length; l++)
-        {
-            //Sum gradients from each trial
-            var sum = new DenseMatrix(first_trial_gradients.weights[l].RowCount, first_trial_gradients.weights[l].ColumnCount);
-            var bias_sum = new DenseVector(first_trial_gradients.biases[l].Count);
-
-            foreach (var gradient in nn_gradients)
-            {
-                sum += gradient.weights[l];
-                bias_sum += gradient.biases[l];
+                //Using chain rule, error term is the transpose of the next layer's weights times it's error term,
+                //times the derivative of ReLU
+                error_term = (DenseVector?)next_weights.TransposeThisAndMultiply(next_errors)
+                    .PointwiseMultiply(neurons.Map(n => n <= 0 ? model.Alpha : 1));
             }
 
-            //Divide sum by count to get average
-            sum = (DenseMatrix)(sum / nn_gradients.Count);
-            bias_sum /= nn_gradients.Count;
-            average_gradients[l] = sum;
-            average_bias_gradients[l] = bias_sum;
-        }
-
-        model = model_initial.Clone();
-
-        //Update weights and biases
-        for (int l = average_gradients.Length - 1; l >= 0; l--)
-        {
-            var gradient = average_gradients[l];
-            var bias_gradient = average_bias_gradients[l];
-            var weights = model.Weights[l];
-            var biases = model.Biases[l];
-
+            //For each output neuron
             for (int i = 0; i < weights.RowCount; i++)
             {
-                //Update bias, using sum of gradients as gradient
-                biases[i] -= learning_rate * bias_gradient[i];
+                DenseVector row_gradients = DenseVector.OfArray(new double[weights.ColumnCount]);
+                double row_error = 0d;
+                MathNet.Numerics.LinearAlgebra.Vector<double> weights_row = weights.Row(i);
 
-                //Update weight
-                for (int j = 0; j < weights.ColumnCount; j++)
-                    weights[i, j] -= learning_rate * gradient[i, j];
+                //Last layer
+                if (l == all_gradients.Length - 1)
+                {
+                    //Gradient of cross-entropy loss wrt softmax activation simplifies to predicted - expected
+                    row_error = neurons[i] - ssims[i];
+                }
+                //Inner layer
+                else
+                {
+                    //Row error is the ith element of the error term
+                    row_error = error_term![i];
+                }
+
+                layer_errors[i] = row_error;
+
+                //Grad of loss wrt bias is just error
+                layer_bias[i] = double.Clamp(row_error, GRADIENT_MIN, GRADIENT_MAX);
+
+                //Grad of loss wrt weights is error * prev activations
+                layer_gradients[i] = (DenseVector)(row_error * activations[l]).Map(n => double.Clamp(n, GRADIENT_MIN, GRADIENT_MAX));
             }
+
+            all_gradients[l] = DenseMatrix.OfRowVectors(layer_gradients);
+            all_errors[l] = layer_errors;
+            all_biases[l] = layer_bias;
         }
 
-        return true;
+        return (all_gradients, all_biases);
     }
 
+    /// <summary>
+    /// Initialize the weights matrix use He Initialization
+    /// </summary>
+    /// <param name="weights">The matrix to initialize</param>
     private static void InitializeWeightsHeNormal(double[,] weights)
     {
-        var fan_in = weights.GetLength(1);
-        var std_dev = Math.Sqrt(2d / fan_in);
+        int fan_in = weights.GetLength(1);
+        double std_dev = Math.Sqrt(2d / fan_in);
 
         for (int i = 0; i < weights.GetLength(0); i++)
         {
             for (int j = 0; j < weights.GetLength(1); j++)
             {
-                weights[i, j] = Random.Shared.NextDouble() * std_dev * Math.Sqrt(12) - std_dev * Math.Sqrt(3);
+                weights[i, j] = (Random.Shared.NextDouble() * std_dev * Math.Sqrt(12)) - (std_dev * Math.Sqrt(3));
             }
         }
     }
 
+    /// <summary>
+    /// Initialize the bias vector use He Initialization
+    /// </summary>
+    /// <param name="biases">The vector to initialize</param>
     private static void InitializeWeightsHeNormal(double[] biases)
     {
-        var std_dev = Math.Sqrt(2d);
+        double std_dev = Math.Sqrt(2d);
 
         for (int i = 0; i < biases.Length; i++)
         {
-            biases[i] = Random.Shared.NextDouble() * std_dev * Math.Sqrt(12) - std_dev * Math.Sqrt(3);
+            biases[i] = (Random.Shared.NextDouble() * std_dev * Math.Sqrt(12)) - (std_dev * Math.Sqrt(3));
         }
     }
 
+    /// <summary>
+    /// Softmax with log-sum-exp
+    /// </summary>
+    /// <param name="input">The vector to apply the softmax to</param>
+    /// <returns>The input with softmax applied</returns>
     private static DenseVector NormalizedSoftmax(DenseVector input)
     {
-        var max = input.Max();
-        var exp = input.Select(x => Math.Exp(x - max)).ToArray();
-        var sum = exp.Sum();
+        double max = input.Max();
+        double[] exp = input.Select(x => Math.Exp(x - max)).ToArray();
+        double sum = exp.Sum();
         return DenseVector.OfArray(exp.Select(x => x / sum).ToArray());
     }
 
+    /// <summary>
+    /// A trained neural network to classify an image tile as an ASCII glyph.
+    /// </summary>
     public class Model
     {
+        /// <summary>
+        /// The glyphs available for classification, one-hot encoded
+        /// by their index in the array.
+        /// </summary>
         public string[] Glyphs { get; set; } = [];
 
+        /// <summary>
+        /// The weights at each layer of the neural net
+        /// </summary>
         public DenseMatrix[] Weights { get; set; } = [];
 
+        /// <summary>
+        /// The biases at each layer of the neural net
+        /// </summary>
         public DenseVector[] Biases { get; set; } = [];
 
+        /// <summary>
+        /// The alpha value to use for Leaky ReLU
+        /// </summary>
         public double Alpha { get; set; } = 0d;
 
         private Model(string[] glyphs, double alpha, DenseMatrix[] weights, DenseVector[] biases)
@@ -420,6 +550,10 @@ public class NNConverter : IImageToASCIIConverter
             Biases = biases;
         }
 
+        /// <summary>
+        /// Initialize the model with the given params
+        /// </summary>
+        /// <param name="model_init_params"></param>
         public Model(ModelInitParams model_init_params)
         {
             Glyphs = model_init_params.Glyphs.ToArray();
@@ -430,44 +564,57 @@ public class NNConverter : IImageToASCIIConverter
             //Initialize weights
             for (int w = 0; w < Weights.Length; w++)
             {
-                var next_activations_count = w == Weights.Length - 1
+                uint next_activations_count = w == Weights.Length - 1
                     ? (uint)Glyphs.Length
                     : model_init_params.HiddenLayerNeuronCount;
 
-                var neuron_count = w == 0
+                uint neuron_count = w == 0
                     ? model_init_params.FeatureCount
                     : model_init_params.HiddenLayerNeuronCount;
 
-                var layer = new double[next_activations_count, neuron_count];
+                double[,] layer = new double[next_activations_count, neuron_count];
                 InitializeWeightsHeNormal(layer);
                 Weights[w] = DenseMatrix.OfArray(layer);
-            }    
+            }
 
             //Initialize biases
-            for(int b = 0; b < Biases.Length; b++)
+            for (int b = 0; b < Biases.Length; b++)
             {
-                var next_activations_count = b == Biases.Length - 1
+                uint next_activations_count = b == Biases.Length - 1
                     ? (uint)Glyphs.Length
                     : model_init_params.HiddenLayerNeuronCount;
 
-                var layer = new double[next_activations_count];
+                double[] layer = new double[next_activations_count];
                 InitializeWeightsHeNormal(layer);
                 Biases[b] = DenseVector.OfArray(layer);
             }
         }
 
-        public Model Clone() => new([.. Glyphs], Alpha, Weights.Select(w => (DenseMatrix)w.Clone()).ToArray(), Biases.Select(b => (DenseVector)b.Clone()).ToArray());
+        /// <summary>
+        /// Create a deep copy of the model
+        /// </summary>
+        /// <returns></returns>
+        public Model Clone()
+        {
+            return new([.. Glyphs], Alpha, Weights.Select(w => (DenseMatrix)w.Clone()).ToArray(), Biases.Select(b => (DenseVector)b.Clone()).ToArray());
+        }
 
+        /// <summary>
+        /// Serialize the model as an array of bytes.
+        /// </summary>
+        /// <returns>An array of bytes representing the model</returns>
         public byte[] ToBytes()
         {
-            using var ms = new MemoryStream();
+            using MemoryStream ms = new();
 
             //Write number of glyphs
             ms.Write(BitConverter.GetBytes(Glyphs.Length));
 
             //Write glyphs
-            foreach(var glyph in Glyphs)
+            foreach (string glyph in Glyphs)
+            {
                 ms.Write(Encoding.ASCII.GetBytes(glyph));
+            }
 
             //Write alpha
             ms.Write(BitConverter.GetBytes(Alpha));
@@ -475,10 +622,10 @@ public class NNConverter : IImageToASCIIConverter
             //Write number of layers
             ms.Write(BitConverter.GetBytes(Weights.Length));
 
-            for(int w = 0; w < Weights.Length; w++)
+            for (int w = 0; w < Weights.Length; w++)
             {
-                var weights = Weights[w];
-                var biases = Biases[w];
+                DenseMatrix weights = Weights[w];
+                DenseVector biases = Biases[w];
 
                 //Write dimensions of layer
                 ms.Write(BitConverter.GetBytes(weights.RowCount));
@@ -494,7 +641,7 @@ public class NNConverter : IImageToASCIIConverter
                 }
 
                 //Write biases
-                for(int i = 0; i < biases.Count; i++)
+                for (int i = 0; i < biases.Count; i++)
                 {
                     ms.Write(BitConverter.GetBytes(biases[i]));
                 }
@@ -503,6 +650,11 @@ public class NNConverter : IImageToASCIIConverter
             return ms.ToArray();
         }
 
+        /// <summary>
+        /// Deserialize the model from an array of bytes.
+        /// </summary>
+        /// <param name="bytes">The serialized model.</param>
+        /// <returns>A model.</returns>
         public static Model FromBytes(byte[] bytes)
         {
             int offset = 0;
@@ -512,9 +664,9 @@ public class NNConverter : IImageToASCIIConverter
             offset += sizeof(int);
 
             //Get glyphs
-            var glyphs = new string[glyph_count];
+            string[] glyphs = new string[glyph_count];
 
-            for(int g = 0; g < glyph_count; g++)
+            for (int g = 0; g < glyph_count; g++)
             {
                 glyphs[g] = Encoding.ASCII.GetString(bytes, offset, 1);
                 offset += sizeof(byte);
@@ -528,10 +680,10 @@ public class NNConverter : IImageToASCIIConverter
             int layers = BitConverter.ToInt32(bytes, offset);
             offset += sizeof(int);
 
-            var weights = new DenseMatrix[layers];
-            var biases = new DenseVector[layers];
+            DenseMatrix[] weights = new DenseMatrix[layers];
+            DenseVector[] biases = new DenseVector[layers];
 
-            for(int l = 0; l < layers; l++)
+            for (int l = 0; l < layers; l++)
             {
                 //Get dimensions of layer
                 int m = BitConverter.ToInt32(bytes, offset);
@@ -539,12 +691,12 @@ public class NNConverter : IImageToASCIIConverter
                 int n = BitConverter.ToInt32(bytes, offset);
                 offset += sizeof(int);
 
-                var layer = new double[m, n];
+                double[,] layer = new double[m, n];
 
                 //Read in weights for layer
-                for(int i = 0; i < m; i++)
+                for (int i = 0; i < m; i++)
                 {
-                    for(int j = 0; j < n; j++)
+                    for (int j = 0; j < n; j++)
                     {
                         layer[i, j] = BitConverter.ToDouble(bytes, offset);
                         offset += sizeof(double);
@@ -553,10 +705,10 @@ public class NNConverter : IImageToASCIIConverter
 
                 weights[l] = DenseMatrix.OfArray(layer);
 
-                var bias = new double[m];
+                double[] bias = new double[m];
 
                 //Read in biases for layer
-                for(int i = 0; i < m; i++)
+                for (int i = 0; i < m; i++)
                 {
                     bias[i] = BitConverter.ToDouble(bytes, offset);
                     offset += sizeof(double);
@@ -570,62 +722,123 @@ public class NNConverter : IImageToASCIIConverter
 
     }
 
+    /// <summary>
+    /// Parameters for creating a new model
+    /// </summary>
     public class ModelInitParams
     {
+        /// <summary>
+        /// The number of features the neural net accepts
+        /// </summary>
         public uint FeatureCount { get; set; } = 0;
 
+        /// <summary>
+        /// The number of hidden layers the neural net contains
+        /// </summary>
         public uint HiddenLayerCount { get; set; } = 0;
 
+        /// <summary>
+        /// The number of neurons each hidden layer contains
+        /// </summary>
         public uint HiddenLayerNeuronCount { get; set; } = 0;
 
+        /// <summary>
+        /// The alpha value to use for Leaky ReLU
+        /// </summary>
         public double Alpha { get; set; } = 0;
 
+        /// <summary>
+        /// The glyphs to use as classes
+        /// </summary>
         public IEnumerable<string> Glyphs { get; set; } = [];
     }
 
+    /// <summary>
+    /// The input data for training a model
+    /// </summary>
     public class TrainingSet
     {
+        /// <summary>
+        /// Coefficient to multiply the gradient by when updating weights
+        /// </summary>
         public double LearningRate { get; set; } = 0;
 
+        /// <summary>
+        /// Rate at which the LearningRate decays wrt each epoch,
+        /// continuously compounded.
+        /// </summary>
         public double LearningDecay { get; set; } = 0;
 
-        public int Epoch { get; set; } = 0;
-
+        /// <summary>
+        /// The number of parallel computations allowed at a time.
+        /// </summary>
         public int Threads { get; set; } = 1;
 
+        /// <summary>
+        /// The number of training examples to be batched together.
+        /// </summary>
+        public int BatchSize { get; set; } = 1;
+
+        /// <summary>
+        /// The training examples.
+        /// </summary>
         public IEnumerable<Input> Input { get; set; } = [];
     }
 
+    /// <summary>
+    /// A training example for the neural net
+    /// </summary>
     public class Input
     {
+        /// <summary>
+        /// The intensities of each pixel in this image tile.
+        /// Each intensity will be in [0, 1].
+        /// </summary>
         public double[] Intensities { get; set; } = [];
 
+        /// <summary>
+        /// The Structural Similarity Index between this image tile
+        /// and each glyph.
+        /// </summary>
         public double[] SSIMs { get; set; } = [];
 
-        public double[] NormalizedSSIMs
-        {
-            get
-            {
-                var sum = SSIMs.Sum();
-                if (sum == 0)
-                    return SSIMs;
-
-                return SSIMs.Select(s => s / sum).ToArray();
-            }
-        }
+        /// <summary>
+        /// The SSIMs, transformed to be a probability distribution
+        /// </summary>
+        public double[] NormalizedSSIMs => [.. NormalizedSoftmax(DenseVector.OfArray(SSIMs))];
     }
 
-    public class Output
-    {
-        public string PredictedGlyph { get; set; } = string.Empty;
-    }
-
+    /// <summary>
+    /// Options to apply to image => ASCII conversion
+    /// </summary>
     public class Options
     {
+        /// <summary>
+        /// If true, will use white-on-black text rather than black-on-white
+        /// </summary>
         public bool InvertFont { get; set; } = false;
 
-        public bool NoColor { get; set; } = false;
-
+        /// <summary>
+        /// The tile/font size to use
+        /// </summary>
         public int FontSize { get; set; } = 16;
+    }
+
+    /// <summary>
+    /// An error that occurred during training of the neural net.
+    /// </summary>
+    /// <param name="message">The error message.</param>
+    /// <param name="ex">The optional inner exception.</param>
+    public class TrainingError(string message, Exception? ex = null)
+    {
+        /// <summary>
+        /// The error message
+        /// </summary>
+        public string Message { get; init; } = message;
+
+        /// <summary>
+        /// The inner exception
+        /// </summary>
+        public Exception? Exception { get; init; } = ex;
     }
 }

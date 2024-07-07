@@ -1,8 +1,8 @@
 {
   "profiles": {
-    "ASCIIArt": {
+    "I2A": {
       "commandName": "Project",
-      "commandLineArgs": "C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\Training \r\n--mode train \r\n--threads 16 \r\n--preprocessed-path C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII preprocessed \r\n--model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\model\\model.nn\r\n--hidden-layers 4\r\n--hidden-neurons 64\r\n--alpha 0.25\r\n--learning-rate 0.05\r\n--learning-rate-decay 0.0005"
+      "commandLineArgs": "C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\Driver\\Training \r\n--mode train \r\n--threads 1\r\n--preprocessed-path C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\preprocessed \r\n--model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\model\\model.nn \r\n--learning-rate 0.0005 \r\n--learning-rate-decay 0 \r\n--alpha 0.005 \r\n--hidden-layers 4 \r\n--hidden-neurons 1024 \r\n--batch-size 4"
     }
   }
 }

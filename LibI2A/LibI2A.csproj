@@ -12,6 +12,7 @@
     <PackageReference Include="Magick.NET.Core" Version="13.9.1" />
     <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="8.0.6" />
+    <PackageReference Include="OneOf" Version="3.0.271" />
     <PackageReference Include="Pastel" Version="5.1.0" />
   </ItemGroup>
 

@@ -1,25 +1,25 @@
 ﻿using ImageMagick;
-using LibI2A.Converter;
 
 namespace LibI2A.Common.Extensions;
+
 public static class MagickExtensions
 {
-    public static double GetLuminance(this IMagickColor<ushort> color,
+    public static double GetIntensity(this IMagickColor<ushort> color,
         (double H, double S, double V) HSVWeights)
     {
         //Convert to HSV
-        var hsv = InternalUtils.ARGBToAHSV((
-            InternalUtils.ScaleUShort(color.A),
-            InternalUtils.ScaleUShort(color.R),
-            InternalUtils.ScaleUShort(color.G),
-            InternalUtils.ScaleUShort(color.B)));
+        (uint a, double h, double s, double v) hsv = Utils.ARGBToAHSV((
+            Utils.ScaleUShort(color.A),
+            Utils.ScaleUShort(color.R),
+            Utils.ScaleUShort(color.G),
+            Utils.ScaleUShort(color.B)));
 
         //Weight HSV components
-        var weighted = (hsv.a, hsv.h * HSVWeights.H, hsv.s * HSVWeights.S, hsv.v * HSVWeights.V);
+        (uint a, double, double, double) weighted = (hsv.a, hsv.h * HSVWeights.H, hsv.s * HSVWeights.S, hsv.v * HSVWeights.V);
 
         //Convert back to rgb
-        var rgb = InternalUtils.AHSVToARGB(weighted);
+        (uint a, uint r, uint g, uint b) rgb = Utils.AHSVToARGB(weighted);
 
-        return InternalUtils.GetLuminance(rgb);
+        return Utils.GetIntensity(rgb);
     }
 }

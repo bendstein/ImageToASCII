@@ -1,4 +1,5 @@
 ﻿using ImageMagick;
+using LibI2A.Common;
 using Pastel;
 
 namespace LibI2A.Converter;
@@ -15,7 +16,7 @@ public class SSIMConverter : IImageToASCIIConverter
         Options options = new();
         configure?.Invoke(options);
         this.options = options;
-        glyph_images = InternalUtils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
+        glyph_images = Utils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
             .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
         calculator = new SSIMCalculator(this.options.SSIMCalculatorOptions);
     }
@@ -23,50 +24,52 @@ public class SSIMConverter : IImageToASCIIConverter
     public SSIMConverter(Options options)
     {
         this.options = options;
-        glyph_images = InternalUtils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
+        glyph_images = Utils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
             .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
         calculator = new SSIMCalculator(this.options.SSIMCalculatorOptions);
     }
 
     public IEnumerable<(string glyph, uint? color)> ConvertImage(Stream input)
     {
-        using var image_collection = new MagickImageCollection(input);
+        using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
-        var image = image_collection.First();
+        IMagickImage<ushort> image = image_collection.First();
 
         //Break images into windows
-        var pixel_image = new PixelImage(image);
+        PixelImage pixel_image = new(image);
 
         int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
         int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
 
         int n = 0;
 
-        foreach (var tile in pixel_image.Tiles(options.FontSize, options.FontSize))
+        foreach (PixelImage tile in pixel_image.Tiles(options.FontSize, options.FontSize))
         {
             if (n > 0 && (n % width) == 0)
+            {
                 yield return (Environment.NewLine, null);
+            }
 
             //Get average color of tile
-            var colors = tile.Pixels
+            List<(uint a, double h, double s, double v)> colors = tile.Pixels
                 .Where(color => color != null)
-                .Select(color => InternalUtils.ARGBToAHSV((
-                    InternalUtils.ScaleUShort(color!.A),
-                    InternalUtils.ScaleUShort(color.R),
-                    InternalUtils.ScaleUShort(color.G),
-                    InternalUtils.ScaleUShort(color.B))))
+                .Select(color => Utils.ARGBToAHSV((
+                    Utils.ScaleUShort(color!.A),
+                    Utils.ScaleUShort(color.R),
+                    Utils.ScaleUShort(color.G),
+                    Utils.ScaleUShort(color.B))))
                 .ToList();
 
             uint combined = 0;
 
-            if(colors.Count > 0)
+            if (colors.Count > 0)
             {
-                var sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
-                var avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
+                (uint a, double h, double s, double v) sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
+                (uint, double, double, double) avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
                     sums.h / colors.Count,
                     sums.s / colors.Count,
                     sums.v / colors.Count);
-                combined = InternalUtils.ToUInt(InternalUtils.AHSVToARGB(avgs));
+                combined = Utils.ToUInt(Utils.AHSVToARGB(avgs));
             }
 
             //Get glyph that is most structurally similar to this tile
@@ -78,34 +81,40 @@ public class SSIMConverter : IImageToASCIIConverter
             {
                 try
                 {
-                    var score = calculator.Calculate(tile, img.Value);
+                    double score = calculator.Calculate(tile, img.Value);
 
                     //If better than current max, record
                     lock (lk)
+                    {
                         if (score > max.score)
+                        {
                             max = (img.Key, score);
+                        }
+                    }
                 }
                 finally
                 {
-                    mutex.Release();
+                    _ = mutex.Release();
                 }
             })).ToList();
 
             //Calculate in parallel
-            foreach (var thread in threads)
+            foreach (Thread thread in threads)
             {
                 mutex.Wait();
                 thread.Start();
             }
 
             //Wait for all threads to complete
-            foreach (var thread in threads)
+            foreach (Thread thread in threads)
+            {
                 thread.Join();
+            }
 
             //Return maximum
-            var glyph = max.key;
+            string glyph = max.key;
 
-            yield return (glyph, options.NoColor? null : combined);
+            yield return (glyph, combined);
             n++;
         }
 
@@ -117,9 +126,13 @@ public class SSIMConverter : IImageToASCIIConverter
         void WriteLine()
         {
             if (writer == null)
+            {
                 Console.WriteLine();
+            }
             else
+            {
                 writer.Invoke(Environment.NewLine, null);
+            }
         }
 
         void Write(string s, uint? color = null)
@@ -128,7 +141,7 @@ public class SSIMConverter : IImageToASCIIConverter
             {
                 string cs = s;
 
-                if(color.HasValue)
+                if (color.HasValue)
                 {
                     System.Drawing.Color? c = System.Drawing.Color.FromArgb(
                         (int)(color >> 24) & 0xFF,
@@ -147,46 +160,48 @@ public class SSIMConverter : IImageToASCIIConverter
             }
         }
 
-        using var image_collection = new MagickImageCollection(input);
+        using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
-        var image = image_collection.First();
+        IMagickImage<ushort> image = image_collection.First();
 
         //Break images into windows
-        var pixel_image = new PixelImage(image);
+        PixelImage pixel_image = new(image);
 
         int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
         int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
 
-        var tiles = pixel_image.Tiles(options.FontSize, options.FontSize).GetEnumerator();
+        IEnumerator<PixelImage> tiles = pixel_image.Tiles(options.FontSize, options.FontSize).GetEnumerator();
 
         for (int n = 0; tiles.MoveNext(); n++)
         {
-            var tile = tiles.Current;
+            PixelImage tile = tiles.Current;
 
             //Line break in console
             if (n > 0 && (n % width) == 0)
+            {
                 WriteLine();
+            }
 
             //Get average color of tile
-            var colors = tile.Pixels
+            List<(uint a, double h, double s, double v)> colors = tile.Pixels
                 .Where(color => color != null)
-                .Select(color => InternalUtils.ARGBToAHSV((
-                    InternalUtils.ScaleUShort(color!.A),
-                    InternalUtils.ScaleUShort(color.R),
-                    InternalUtils.ScaleUShort(color.G),
-                    InternalUtils.ScaleUShort(color.B))))
+                .Select(color => Utils.ARGBToAHSV((
+                    Utils.ScaleUShort(color!.A),
+                    Utils.ScaleUShort(color.R),
+                    Utils.ScaleUShort(color.G),
+                    Utils.ScaleUShort(color.B))))
                 .ToList();
 
             uint combined = 0;
 
             if (colors.Count > 0)
             {
-                var sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
-                var avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
+                (uint a, double h, double s, double v) sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
+                (uint, double, double, double) avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
                     sums.h / colors.Count,
                     sums.s / colors.Count,
                     sums.v / colors.Count);
-                combined = InternalUtils.ToUInt(InternalUtils.AHSVToARGB(avgs));
+                combined = Utils.ToUInt(Utils.AHSVToARGB(avgs));
             }
 
             //Get all glyphs and values
@@ -201,13 +216,15 @@ public class SSIMConverter : IImageToASCIIConverter
                 {
                     try
                     {
-                        var score = calculator.Calculate(tile, img.Value);
+                        double score = calculator.Calculate(tile, img.Value);
 
                         lock (scores)
                         {
                             //If better than current max, record as max
                             if (score > max.value)
+                            {
                                 max = (img.Key, score);
+                            }
 
                             //Record score
                             scores[img.Key] = score;
@@ -215,32 +232,34 @@ public class SSIMConverter : IImageToASCIIConverter
                     }
                     finally
                     {
-                        mutex.Release();
+                        _ = mutex.Release();
                     }
                 })).ToList();
 
                 //Calculate in parallel
-                foreach (var thread in threads)
+                foreach (Thread thread in threads)
                 {
                     mutex.Wait();
                     thread.Start();
                 }
 
                 //Wait for all threads to complete
-                foreach (var thread in threads)
+                foreach (Thread thread in threads)
+                {
                     thread.Join();
+                }
 
                 //Return maximum
                 return (max.key, scores);
             }
 
-            (var glyph, var glyphs) = getGlyphs(glyph_images);
+            (string? glyph, Dictionary<string, double>? glyphs) = getGlyphs(glyph_images);
             //(var inv_glyph, var inv_glyphs) = getGlyphs(glyph_images_inv);
 
             //Print best match
-            Write(glyph, options.NoColor? null : combined);
+            Write(glyph, combined);
 
-            var intensities = tile.GetIntensities().ToArray();
+            double[] intensities = tile.GetIntensities().ToArray();
 
             yield return (intensities, glyphs.Select(g => (g.Key, g.Value)).ToArray());
         }
@@ -262,8 +281,6 @@ public class SSIMConverter : IImageToASCIIConverter
         public string FontFace { get; set; } = string.Empty;
 
         public bool InvertFont { get; set; } = false;
-
-        public bool NoColor { get; set; } = false;
 
         public int ParallelCalculate { get; set; } = 1;
 

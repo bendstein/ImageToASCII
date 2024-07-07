@@ -1,3 +1,3 @@
 ﻿new Spectre.Console.Cli
-    .CommandApp<ASCIIArt.App>()
+    .CommandApp<I2A.App>()
     .Run(args);

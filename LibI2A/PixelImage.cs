@@ -17,7 +17,9 @@ public class PixelImage
     public int BitDepth => OriginalImage.DetermineBitDepth();
 
     public List<double> GetIntensities((double H, double S, double V)? HSVWeights = null)
-        => Pixels.Select(p => p?.GetLuminance(HSVWeights ?? (1, 1, 1)) ?? 0).ToList();
+    {
+        return Pixels.Select(p => p?.GetIntensity(HSVWeights ?? (1, 1, 1)) ?? 0).ToList();
+    }
 
     public PixelImage(IMagickImage<ushort> originalImage)
     {
@@ -41,41 +43,44 @@ public class PixelImage
     public IEnumerable<PixelImage> Tiles(int width, int height)
     {
         //Unflatten pixel array, pad to fit multiples of tiles
-        int padded_image_width = Width + width - (Width % width == 0? width : Width % width);
-        int padded_image_height = Height + height - (Height % height == 0? height : Height % height);
+        int padded_image_width = Width + width - (Width % width == 0 ? width : Width % width);
+        int padded_image_height = Height + height - (Height % height == 0 ? height : Height % height);
 
-        var pixels_2d = new IMagickColor<ushort>?[padded_image_width, padded_image_height];
+        IMagickColor<ushort>?[,] pixels_2d = new IMagickColor<ushort>?[padded_image_width, padded_image_height];
 
         for (int j = 0; j < Height; j++)
         {
             for (int i = 0; i < Width; i++)
             {
-                var pixel = Pixels[i + (j * Width)];
+                IMagickColor<ushort>? pixel = Pixels[i + (j * Width)];
                 pixels_2d[i, j] = pixel;
             }
         }
-        
+
 
         //Evaluate one row at a time
-        for(int k = 0; k < padded_image_height; )
+        for (int k = 0; k < padded_image_height;)
         {
             List<List<IMagickColor<ushort>?>> row = [];
 
-            for(int j = 0; j < height; j++, k++)
+            for (int j = 0; j < height; j++, k++)
             {
-                for(int i = 0; i < padded_image_width; i++)
+                for (int i = 0; i < padded_image_width; i++)
                 {
                     if (i / width == row.Count)
+                    {
                         row.Add([]);
-                    var tile = row[i / width];
+                    }
+
+                    List<IMagickColor<ushort>?> tile = row[i / width];
                     tile.Add(pixels_2d[i, k]);
                 }
             }
 
-            foreach(var tile in row)
+            foreach (List<IMagickColor<ushort>?> tile in row)
             {
                 yield return new PixelImage(OriginalImage,
-                    [..tile], width, height);
+                    [.. tile], width, height);
             }
         }
 
