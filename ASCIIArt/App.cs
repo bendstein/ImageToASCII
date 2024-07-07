@@ -233,10 +233,10 @@ public class App : AsyncCommand<AppSettings>
                         {
                             Input = training_input,
                             LearningRate = settings.LearningRate,
-                            LearningDecay = settings.LearningDecay,
                             Threads = settings.Threads,
                             BatchSize = settings.BatchSize,
-                            Lambda = settings.Lambda
+                            Lambda = settings.Lambda,
+                            AdamParams = settings.AdamParams
                         };
 
                         //Save the model to a file
@@ -477,7 +477,7 @@ public class App : AsyncCommand<AppSettings>
                                 }
                             }
                         }
-
+               
                         yield return new()
                         {
                             Intensities = intensities,

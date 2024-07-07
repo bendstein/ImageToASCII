@@ -119,11 +119,6 @@ public class AppSettings : CommandSettings
     [Description("The rate at which the model learns.")]
     public double LearningRate { get; set; } = 0.01d;
 
-    [CommandOption("--learning-rate-decay")]
-    [DefaultValue(0.01d)]
-    [Description("The continuously compounded rate at which learning rate decreases with each epoch.")]
-    public double LearningDecay { get; set; } = 0.01d;
-
     [CommandOption("--alpha")]
     [DefaultValue(0d)]
     [Description("The leak rate of leaky ReLU.")]
@@ -148,6 +143,23 @@ public class AppSettings : CommandSettings
     [DefaultValue(64)]
     [Description("The size of the mini-batches to train the neural net on.")]
     public int BatchSize { get; set; } = 64;
+
+    public (double beta_1, double beta_2) AdamParams { get; set; } = (0, 0);
+
+    [CommandOption("--adam")]
+    [Description("The 'BETA 1, BETA 2' params for Adam.")]
+    public string AdamParamsString
+    {
+        get => $"{AdamParams.beta_1},{AdamParams.beta_2}";
+        set
+        {
+            var split = value.Split(',', 2, StringSplitOptions.TrimEntries);
+            var beta_1 = split.Length < 1? 0 : double.TryParse(split[0], out var bt_1)? bt_1 : 0;
+            var beta_2 = split.Length < 2? 0 : double.TryParse(split[1], out var bt_2)? bt_2 : 0;
+
+            AdamParams = (beta_1, beta_2);
+        }
+    }
 }
 
 public enum Mode

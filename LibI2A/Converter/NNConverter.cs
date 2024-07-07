@@ -1,8 +1,8 @@
 ﻿using ImageMagick;
 using LibI2A.Common;
 using MathNet.Numerics.LinearAlgebra.Double;
+using MathNet.Numerics.Statistics;
 using OneOf;
-using System.Linq;
 using System.Text;
 
 namespace LibI2A.Converter;
@@ -19,11 +19,16 @@ public class NNConverter : IImageToASCIIConverter
     private const double EPS = 0.00001d;
 
     /// <summary>
+    /// Epsilon for Adam calculation to prevent /0
+    /// </summary>
+    private const double ADAM_EPS = 0.0000001d;
+
+    /// <summary>
     /// Clamp gradients to this range
     /// </summary>
     private const double
-        GRADIENT_MAX = 10d,
-        GRADIENT_MIN = -10d;
+        GRADIENT_MAX = 25d,
+        GRADIENT_MIN = -25d;
 
     /// <summary>
     /// The trained neural net to use for predictions
@@ -185,14 +190,14 @@ public class NNConverter : IImageToASCIIConverter
             IEnumerator<Input[]> batches = training_set.Input.Chunk(training_set.BatchSize).GetEnumerator();
             Model model = model_initial;
 
+            //Init Adam
+            Adam adam = new(training_set.LearningRate, training_set.AdamParams.beta_1, training_set.AdamParams.beta_2, model);
+
             for (int epoch = 0; batches.MoveNext(); epoch++)
             {
                 token.ThrowIfCancellationRequested();
 
                 Input[] batch = batches.Current;
-
-                //Get learning rate w/ exponential decay
-                double learning_rate = training_set.LearningRate * Math.Exp(-training_set.LearningDecay * epoch);
 
                 SemaphoreSlim tasks = new(training_set.Threads, training_set.Threads);
 
@@ -213,7 +218,7 @@ public class NNConverter : IImageToASCIIConverter
                         {
                             token.ThrowIfCancellationRequested();
 
-                            DenseVector[] activations = PropagateForwards(model_initial, input);
+                            DenseVector[] activations = PropagateForwards(model, input);
 
                             //Compare the output to the expected value
                             DenseVector output = activations[^1];
@@ -287,10 +292,10 @@ public class NNConverter : IImageToASCIIConverter
                 //Average gradients across all trials
                 List<(DenseMatrix[] weights, DenseVector[] biases)> nn_gradients = batch_gradients.Where(g => g.weights != null && g.biases != null).Select(g => (weights: g.weights!, biases: g.biases!)).ToList();
                 (DenseMatrix[] weights, DenseVector[] biases) first_trial_gradients = nn_gradients.First();
-                DenseMatrix[] average_gradients = new DenseMatrix[model_initial.Weights.Length];
-                DenseVector[] average_bias_gradients = new DenseVector[model_initial.Weights.Length];
+                DenseMatrix[] average_gradients = new DenseMatrix[model.Weights.Length];
+                DenseVector[] average_bias_gradients = new DenseVector[model.Weights.Length];
 
-                for (int l = 0; l < model_initial.Weights.Length; l++)
+                for (int l = 0; l < model.Weights.Length; l++)
                 {
                     token.ThrowIfCancellationRequested();
 
@@ -315,19 +320,22 @@ public class NNConverter : IImageToASCIIConverter
 
                 token.ThrowIfCancellationRequested();
 
-                model = model_initial.Clone();
+                model = model.Clone();
 
-                //Update weights and biases
-                for (int l = average_gradients.Length - 1; l >= 0; l--)
-                {
-                    token.ThrowIfCancellationRequested();
+                //Update weights and biases using Adam
+                UpdateAdamWeights(adam, model, average_gradients, average_bias_gradients, training_set.Lambda, epoch);
 
-                    //Update biases
-                    model.Biases[l] -= learning_rate * average_bias_gradients[l];
+                ////Update weights and biases
+                //for (int l = average_gradients.Length - 1; l >= 0; l--)
+                //{
+                //    token.ThrowIfCancellationRequested();
 
-                    //Update weights (w/ L2 Regularization)
-                    model.Weights[l] -= learning_rate * (average_gradients[l] + (training_set.Lambda * model.Weights[l]));
-                }
+                //    //Update biases
+                //    model.Biases[l] -= learning_rate * average_bias_gradients[l];
+
+                //    //Update weights (w/ L2 Regularization)
+                //    model.Weights[l] -= learning_rate * (average_gradients[l] + (training_set.Lambda * model.Weights[l]));
+                //}
 
                 token.ThrowIfCancellationRequested();
 
@@ -352,7 +360,7 @@ public class NNConverter : IImageToASCIIConverter
     /// <returns>The activations from each layer of the neural net.</returns>
     private static DenseVector[] PropagateForwards(Model model, Input input)
     {
-        DenseVector neurons = DenseVector.OfArray(input.Intensities);
+        DenseVector neurons = DenseVector.OfArray(input.NormalizedIntensities);
 
         DenseVector[] activations = new DenseVector[model.Weights.Length + 1];
         activations[0] = neurons;
@@ -438,6 +446,44 @@ public class NNConverter : IImageToASCIIConverter
         }
 
         return (all_gradients, all_biases);
+    }
+
+    /// <summary>
+    /// Update adam moments and model weights
+    /// </summary>
+    /// <param name="adam"></param>
+    /// <param name="model"></param>
+    /// <param name="gradients"></param>
+    /// <param name="bias_gradients"></param>
+    /// <param name="l2_coeff"></param>
+    /// <param name="epoch"></param>
+    private static void UpdateAdamWeights(Adam adam, Model model, DenseMatrix[] gradients, DenseVector[] bias_gradients, double l2_coeff, int epoch)
+    {
+        for(int l = 0; l < model.Weights.Length; l++)
+        {
+            //Update first moment
+            adam.Moment1[l] = adam.Decay.A * adam.Moment1[l] + (1 - adam.Decay.A) * gradients[l];
+            adam.Bias1[l] = adam.Decay.A * adam.Bias1[l] + (1 - adam.Decay.A) * bias_gradients[l];
+
+            //Update second moment
+            adam.Moment2[l] = (DenseMatrix)(adam.Decay.B * adam.Moment2[l] + (1 - adam.Decay.B) * gradients[l].PointwiseMultiply(gradients[l]));
+            adam.Bias2[l] = (DenseVector)(adam.Decay.B * adam.Bias2[l] + (1 - adam.Decay.B) * bias_gradients[l].PointwiseMultiply(bias_gradients[l]));
+
+            //Compute bias-corrected first moment
+            var moment1_corrected = adam.Moment1[l] / (1 - Math.Pow(adam.Decay.A, epoch + 1));
+            var bias1_corrected = adam.Bias1[l] / (1 - Math.Pow(adam.Decay.A, epoch + 1));
+
+            //Compute bias-corrected second moment
+            var moment2_corrected = adam.Moment2[l] / (1 - Math.Pow(adam.Decay.B, epoch + 1));
+            var bias2_corrected = adam.Bias2[l] / (1 - Math.Pow(adam.Decay.B, epoch + 1));
+
+            var adam_learning_rate = moment1_corrected.PointwiseDivide(moment2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
+            var adam_bias_learning_rate = bias1_corrected.PointwiseDivide(bias2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
+
+            //Update weights and biases
+            model.Weights[l] -= (DenseMatrix)(adam.LearningRate * (adam_learning_rate + l2_coeff * model.Weights[l]));
+            model.Biases[l] -= (DenseVector)(adam.LearningRate * adam_bias_learning_rate);
+        }
     }
 
     /// <summary>
@@ -761,12 +807,6 @@ public class NNConverter : IImageToASCIIConverter
         public double LearningRate { get; set; } = 0;
 
         /// <summary>
-        /// Rate at which the LearningRate decays wrt each epoch,
-        /// continuously compounded.
-        /// </summary>
-        public double LearningDecay { get; set; } = 0;
-
-        /// <summary>
         /// The number of parallel computations allowed at a time.
         /// </summary>
         public int Threads { get; set; } = 1;
@@ -782,9 +822,70 @@ public class NNConverter : IImageToASCIIConverter
         public double Lambda { get; set; } = 0;
 
         /// <summary>
+        /// The beta 1 and beta 2 params for Adam
+        /// </summary>
+        public (double beta_1, double beta_2) AdamParams { get; set; } = (0, 0);
+
+        /// <summary>
         /// The training examples.
         /// </summary>
         public IEnumerable<Input> Input { get; set; } = [];
+    }
+
+    /// <summary>
+    /// Data for Adam optimization
+    /// </summary>
+    public class Adam
+    {
+        /// <summary>
+        /// Learning rate for the neural net
+        /// </summary>
+        public double LearningRate { get; set; } = 0d;
+
+        /// <summary>
+        /// Exponential decay rates for each step
+        /// </summary>
+        public (double A, double B) Decay { get; set; } = (0d, 0d);
+
+        /// <summary>
+        /// Gradients
+        /// </summary>
+        public DenseMatrix[] Moment1 { get; set; } = [];
+
+        /// <summary>
+        /// Square of the gradients
+        /// </summary>
+        public DenseMatrix[] Moment2 { get; set; } = [];
+
+        /// <summary>
+        /// Bias for first moment
+        /// </summary>
+        public DenseVector[] Bias1 { get; set; } = [];
+
+        /// <summary>
+        /// Bias for second moment
+        /// </summary>
+        public DenseVector[] Bias2 { get; set; } = [];
+
+        public Adam(double learning_rate, double decay_1, double decay_2, Model model)
+        {
+            LearningRate = learning_rate;
+            Decay = (decay_1, decay_2);
+
+            Moment1 = new DenseMatrix[model.Weights.Length];
+            Moment2 = new DenseMatrix[model.Weights.Length];
+            Bias1 = new DenseVector[model.Weights.Length];
+            Bias2 = new DenseVector[model.Weights.Length];
+
+            //Init all values to 0z
+            for(int i = 0; i < model.Weights.Length; i++)
+            {
+                Moment1[i] = new DenseMatrix(model.Weights[i].RowCount, model.Weights[i].ColumnCount);
+                Moment2[i] = new DenseMatrix(model.Weights[i].RowCount, model.Weights[i].ColumnCount);
+                Bias1[i] = new DenseVector(model.Weights[i].RowCount);
+                Bias2[i] = new DenseVector(model.Weights[i].RowCount);
+            }
+        }
     }
 
     /// <summary>
@@ -794,9 +895,25 @@ public class NNConverter : IImageToASCIIConverter
     {
         /// <summary>
         /// The intensities of each pixel in this image tile.
-        /// Each intensity will be in [0, 1].
         /// </summary>
         public double[] Intensities { get; set; } = [];
+
+        /// <Intensities>
+        /// The Intensities, standardized to have mean of 0 and std deviation of 1
+        /// </summary>
+        public double[] NormalizedIntensities
+        {
+            get
+            {
+                var mean = Intensities.Mean();
+                var std_dev = Intensities.StandardDeviation();
+
+                if (std_dev == 0 || double.IsNaN(mean) || double.IsNaN(std_dev))
+                    return Intensities;
+
+                return [.. Intensities.Select(s => (s - mean) / std_dev)];
+            }
+        }
 
         /// <summary>
         /// The Structural Similarity Index between this image tile
@@ -805,21 +922,9 @@ public class NNConverter : IImageToASCIIConverter
         public double[] SSIMs { get; set; } = [];
 
         /// <summary>
-        /// The SSIMs, transformed to be a probability distribution
+        /// The SSIMs, normalized using softmax to match model output
         /// </summary>
-        public double[] NormalizedSSIMs
-        {
-            get
-            {
-                //var sum = SSIMs.Sum();
-
-                //if (sum == 0)
-                //    return SSIMs;
-
-                //return SSIMs.Select(s => s / sum).ToArray();
-                return NormalizedSoftmax(DenseVector.OfArray(SSIMs)).ToArray();
-            }
-        }
+        public double[] NormalizedSSIMs => NormalizedSoftmax(DenseVector.OfArray(SSIMs)).ToArray();
     }
 
     /// <summary>
