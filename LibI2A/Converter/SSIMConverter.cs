@@ -1,5 +1,4 @@
 ﻿using ImageMagick;
-using LibI2A.SSIM;
 using Pastel;
 
 namespace LibI2A.Converter;
@@ -7,30 +6,26 @@ public class SSIMConverter : IImageToASCIIConverter
 {
     private readonly SSIMCalculator calculator;
 
-    private readonly ISSIMStore store;
-
     private readonly Dictionary<string, PixelImage> glyph_images;
 
     private readonly Options options;
 
-    public SSIMConverter(ISSIMStore store, Action<Options>? configure = null)
+    public SSIMConverter(Action<Options>? configure = null)
     {
-        this.store = store;
         Options options = new();
         configure?.Invoke(options);
         this.options = options;
         glyph_images = InternalUtils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
             .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
-        calculator = new SSIMCalculator(store, this.options.SSIMCalculatorOptions);
+        calculator = new SSIMCalculator(this.options.SSIMCalculatorOptions);
     }
 
-    public SSIMConverter(ISSIMStore store, Options options)
+    public SSIMConverter(Options options)
     {
-        this.store = store;
         this.options = options;
         glyph_images = InternalUtils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
             .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
-        calculator = new SSIMCalculator(store, this.options.SSIMCalculatorOptions);
+        calculator = new SSIMCalculator(this.options.SSIMCalculatorOptions);
     }
 
     public IEnumerable<(string glyph, uint? color)> ConvertImage(Stream input)
@@ -75,44 +70,40 @@ public class SSIMConverter : IImageToASCIIConverter
             }
 
             //Get glyph that is most structurally similar to this tile
-            var glyph = store.GetOrCalculateAndStoreSoln([..tile.GetIntensities()],
-                () =>
+            SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
+            (string key, double score) max = (string.Empty, double.MinValue);
+            var lk = new { };
+
+            List<Thread> threads = glyph_images.Select(img => new Thread(() =>
+            {
+                try
                 {
-                    SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
-                    (string key, double score) max = (string.Empty, double.MinValue); 
-                    var lk = new { };
+                    var score = calculator.Calculate(tile, img.Value);
 
-                    List<Thread> threads = glyph_images.Select(img => new Thread(() =>
-                    {
-                        try
-                        {
-                            var score = calculator.Calculate(tile, img.Value);
+                    //If better than current max, record
+                    lock (lk)
+                        if (score > max.score)
+                            max = (img.Key, score);
+                }
+                finally
+                {
+                    mutex.Release();
+                }
+            })).ToList();
 
-                            //If better than current max, record
-                            lock(lk)
-                                if (score > max.score)
-                                    max = (img.Key, score);
-                        }
-                        finally
-                        {
-                            mutex.Release();
-                        }
-                    })).ToList();
+            //Calculate in parallel
+            foreach (var thread in threads)
+            {
+                mutex.Wait();
+                thread.Start();
+            }
 
-                    //Calculate in parallel
-                    foreach(var thread in threads)
-                    {
-                        mutex.Wait();
-                        thread.Start();
-                    }
+            //Wait for all threads to complete
+            foreach (var thread in threads)
+                thread.Join();
 
-                    //Wait for all threads to complete
-                    foreach(var thread in threads)
-                        thread.Join();
-
-                    //Return maximum
-                    return max.key;
-                });
+            //Return maximum
+            var glyph = max.key;
 
             yield return (glyph, options.NoColor? null : combined);
             n++;

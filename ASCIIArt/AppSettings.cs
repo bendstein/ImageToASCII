@@ -115,6 +115,36 @@ public class AppSettings : CommandSettings
     [DefaultValue(PREPROCESS_PATH_DEFAULT)]
     [Description("Pull preprocessed data from this file/directory when in training mode.")]
     public string PreprocessedPath { get; set; } = PREPROCESS_PATH_DEFAULT;
+
+    [CommandOption("--shuffle")]
+    [DefaultValue(false)]
+    [Description("Shuffle preprocessed input.")]
+    public bool Shuffle { get; set; } = false;
+
+    [CommandOption("--learning-rate")]
+    [DefaultValue(0.01d)]
+    [Description("The rate at which the model learns.")]
+    public double LearningRate { get; set; } = 0.01d;
+
+    [CommandOption("--learning-rate-decay")]
+    [DefaultValue(0.01d)]
+    [Description("The continuously compounded rate at which learning rate decreases with each epoch.")]
+    public double LearningDecay { get; set; } = 0.01d;
+
+    [CommandOption("--alpha")]
+    [DefaultValue(0d)]
+    [Description("The leak rate of leaky ReLU.")]
+    public double ReLUAlpha { get; set; } = 0d;
+
+    [CommandOption("--hidden-layers")]
+    [DefaultValue(0)]
+    [Description("The number of inner layers in the neural net.")]
+    public int HiddenLayers { get; set; } = 0;
+
+    [CommandOption("--hidden-neurons")]
+    [DefaultValue(0)]
+    [Description("The number of neurons each hidden layer will have.")]
+    public int HiddenNeurons { get; set; } = 0;
 }
 
 public enum Mode

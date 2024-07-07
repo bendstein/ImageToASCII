@@ -139,3 +139,6 @@ Driver/model/
 .editorconfig
 Driver/Training/
 Driver/Training 2/
+preprocessed-2-original.txt
+preprocessed/preprocessed.txt
+RandomImageGenerator/prompts.json

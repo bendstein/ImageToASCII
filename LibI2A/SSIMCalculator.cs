@@ -1,24 +1,20 @@
-﻿namespace LibI2A.SSIM;
+﻿namespace LibI2A;
 
-public class SSIMCalculator : ISSIMCalculator
+public class SSIMCalculator
 {
-    private readonly ISSIMStore store;
-
     private readonly Options options;
 
     private static readonly (double H, double S, double V) HSV_WEIGHTS = (1, 1.2d, 1.1d);
 
-    public SSIMCalculator(ISSIMStore store, Action<Options>? configure = null)
+    public SSIMCalculator(Action<Options>? configure = null)
     {
-        this.store = store;
         Options options = new();
         configure?.Invoke(options);
         this.options = options;
     }
 
-    public SSIMCalculator(ISSIMStore store, Options options)
+    public SSIMCalculator(Options options)
     {
-        this.store = store;
         this.options = options;
     }
 
@@ -52,7 +48,7 @@ public class SSIMCalculator : ISSIMCalculator
 
             //Get gaussian-weighted standard deviation of the intensities of each image (contrast)
             var stddev = (
-                a: intensities.a.Count <= 0? 0 : Math.Sqrt(intensities.a.Select((i, ndx) => W(ndx) * Math.Pow(i - mean.a, 2)).Sum()),
+                a: intensities.a.Count <= 0 ? 0 : Math.Sqrt(intensities.a.Select((i, ndx) => W(ndx) * Math.Pow(i - mean.a, 2)).Sum()),
                 b: intensities.b.Count <= 1 ? 0 : Math.Sqrt(intensities.b.Select((i, ndx) => W(ndx) * Math.Pow(i - mean.b, 2)).Sum())
             );
 
@@ -84,8 +80,8 @@ public class SSIMCalculator : ISSIMCalculator
             var w3 = options.Weights.W3;
 
             //Calculate local SSIM
-            var ssim = ((w1 * (2 * mean.a * mean.b) + c1)
-                * (w3 * (2 * covar) + c2))
+            var ssim = (w1 * (2 * mean.a * mean.b) + c1)
+                * (w3 * (2 * covar) + c2)
                 /
                 ((w1 * (Math.Pow(mean.a, 2) + Math.Pow(mean.b, 2)) + c1)
                 * (w2 * (Math.Pow(stddev.a, 2) + Math.Pow(stddev.b, 2)) + c2));
@@ -126,13 +122,12 @@ public class SSIMCalculator : ISSIMCalculator
                 var intensities_a = image_a.GetIntensities().ToArray();
                 var intensities_b = image_b.GetIntensities().ToArray();
 
-                ssim_sum += store.GetOrCalculateAndStore(intensities_a, intensities_b,
-                    () => W(t) * CalculateSubtile(subtile_a, subtile_b));
+                ssim_sum += W(t) * CalculateSubtile(subtile_a, subtile_b);
             }
         }
 
         //Return average of gaussian weighted SSIMs
-        return subtiles == 0? 0 : ssim_sum / subtiles;
+        return subtiles == 0 ? 0 : ssim_sum / subtiles;
     }
 
     /// <summary>
@@ -160,12 +155,12 @@ public class SSIMCalculator : ISSIMCalculator
 
                 sum += value;
 
-                gaussian[(w * j) + i] = value;
+                gaussian[w * j + i] = value;
             }
         }
 
         //Scale to 1
-        for(int i = 0; i < gaussian.Length; i++)
+        for (int i = 0; i < gaussian.Length; i++)
             gaussian[i] /= sum;
 
         return gaussian;

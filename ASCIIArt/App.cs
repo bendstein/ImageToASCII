@@ -1,13 +1,8 @@
-﻿using Driver;
-using LibI2A;
+﻿using LibI2A;
 using LibI2A.Common;
 using LibI2A.Converter;
-using LibI2A.SSIM;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using System;
-using System.Runtime;
-using System.Text;
 
 namespace ASCIIArt;
 public class App : Command<AppSettings>
@@ -19,56 +14,44 @@ public class App : Command<AppSettings>
         LAYOUT_TRAINING = "Training";
 
     private const int
-        LIVE_UPDATE = 250;
+        LIVE_UPDATE = 250,
+        PREPROCESS_PRECISION = 8;
 
     public override int Execute(CommandContext context, AppSettings settings)
     {
-        Layout? layout = null;
-        StringBuilder ascii = new();
-        Table? log_table = null;
         int stop = 0;
+
+        if (!Directory.Exists("log"))
+            Directory.CreateDirectory("log");
+
+        bool log_console = true;
+
+        using var log_stream = new FileStream($"log/{DateTime.Now:MM-dd-yyyy-HH-mm-ss-ffff}.log", FileMode.OpenOrCreate, FileAccess.Write);
+        using var log_writer = new StreamWriter(log_stream);
 
         void Log(string message, bool is_error = false)
         {
-            if (layout != null && log_table != null && layout.TryGetLayout(LAYOUT_LOG, out var log))
-            {
-                log_table.AddRow(DateTime.Now.ToString("HH:mm:ss.ffff"), is_error ? "[bold red]ERROR[/]" : "INFO", StringExtensions.EscapeMarkup(message));
+            var full_message = $"{DateTime.Now:HH:mm:ss.ffff} {(is_error ? "ERROR | " : "INFO  | ")} {message}";
 
-                while (log_table.Rows.Count + 5 > AnsiConsole.Profile.Height)
-                {
-                    log_table.RemoveRow(0);
-                }
+            if(log_console)
+                Console.WriteLine(full_message);
 
-                log.Update(log_table);
-            }
+            log_writer.WriteLine(full_message);
         }
 
         void WriteGlyph(string glyph, uint? color = null)
         {
-            if (layout != null && layout.TryGetLayout(LAYOUT_CANVAS, out var canvas))
+            string s = glyph;
+
+            if (color != null && !settings.NoColor)
             {
-                string s = StringExtensions.EscapeMarkup(glyph);
-
-                if (color != null && !settings.NoColor)
-                {
-                    int r = (int)(color >> 16) & 0xFF;
-                    int g = (int)(color >> 8) & 0xFF;
-                    int b = (int)color & 0xFF;
-                    s = $"[rgb({r},{g},{b})]{s}[/]";
-                }
-
-                ascii.Append(s);
-
-                canvas.Update(new Markup(ascii.ToString()));
+                int r = (int)(color >> 16) & 0xFF;
+                int g = (int)(color >> 8) & 0xFF;
+                int b = (int)color & 0xFF;
+                s = Pastel.ConsoleExtensions.Pastel(s, System.Drawing.Color.FromArgb(r, g, b));
             }
-        }
 
-        void LogNeuralNetData(NeuralNetConverter.DebugData data)
-        {
-            if(layout.TryGetLayout(LAYOUT_TRAINING, out var training_layout))
-            {
-
-            }
+            Console.Write(s);
         }
 
         void OnClose(object? sender, ConsoleCancelEventArgs e)
@@ -87,41 +70,7 @@ public class App : Command<AppSettings>
 
         try
         {
-            layout = settings.Mode switch
-            {
-                Mode.preprocess => new Layout(LAYOUT_ROOT)
-                    .SplitColumns(
-                        new Layout(LAYOUT_CANVAS),
-                        new Layout(LAYOUT_LOG)),
-                Mode.train => new Layout(LAYOUT_ROOT)
-                    .SplitColumns(
-                        new Layout(LAYOUT_TRAINING),
-                        new Layout(LAYOUT_LOG)),
-                Mode.render or _ => new Layout(LAYOUT_CANVAS)
-            };
-
-            log_table = new();
-
-            log_table.AddColumns("Timestamp", "Type", "Message");
-
-            Log("Starting...");
-            WriteGlyph(string.Empty);
-
             Console.CancelKeyPress += OnClose;
-
-            SemaphoreSlim done = new(0, 1);
-
-            Thread live_thread = new(() =>
-            {
-                AnsiConsole.Live(layout)
-                    .AutoClear(false)
-                    .Start(ctx =>
-                    {
-                        while (!done.Wait(LIVE_UPDATE))
-                            ctx.Refresh();
-                    });
-            });
-            live_thread.Start();
 
             try
             {
@@ -130,13 +79,18 @@ public class App : Command<AppSettings>
                     //Preprocess images
                     case Mode.preprocess:
                     {
+                        log_console = false;
+
+                        Log("Starting...");
+                        WriteGlyph(string.Empty);
+
                         //Read glyphs file
                         var glyphs = LoadGlyphs(settings.Glyphs);
 
                         if(glyphs.Length == 0)
                             throw new Exception("No glyphs were present.");
 
-                        var converter = new SSIMConverter(new NoSSIMStore(), opts =>
+                        var converter = new SSIMConverter(opts =>
                         {
                             opts.FontSize = settings.TileSize;
                             opts.FontFace = settings.FontFace;
@@ -157,6 +111,8 @@ public class App : Command<AppSettings>
                         using var preprocess_file_stream = new FileStream(settings.PreprocessPath, FileMode.OpenOrCreate, FileAccess.Write);
                         using var preprocess_file_writer = new StreamWriter(preprocess_file_stream);
 
+                        IEnumerable<string> paths = [];
+
                         //Process each file
                         foreach(var file in settings.Path.SelectMany(path =>
                         {
@@ -167,8 +123,6 @@ public class App : Command<AppSettings>
                             return [];
                         }).Distinct())
                         {
-                            ascii.Clear();
-
                             if (stop > 0)
                                 break;
 
@@ -186,7 +140,7 @@ public class App : Command<AppSettings>
                                 if (s > 0 && s % 100 == 0)
                                     Log($"Preprocessing image {file}...");
 
-                                preprocess_file_writer.WriteLine($"{string.Join(',', solution.intensities.Select(i => InternalUtils.Round(i, DictionarySSIMStore.PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
+                                preprocess_file_writer.WriteLine($"{string.Join(',', solution.intensities.Select(i => InternalUtils.Round(i, PREPROCESS_PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
                                 s++;
                             }
                         }
@@ -198,13 +152,30 @@ public class App : Command<AppSettings>
                     //Train on preprocessed images
                     case Mode.train:
                     {
+                        Log("Starting...");
+                        WriteGlyph(string.Empty);
+
+                        //Load model
+                        NNConverter.Model? model = null;
+
+                        if (!string.IsNullOrWhiteSpace(settings.Model) && File.Exists(settings.Model))
+                        {
+                            Log($"Reading model from {settings.Model}.");
+
+                            using var fs = new FileStream(settings.Model, FileMode.Open, FileAccess.Read);
+                            using var ms = new MemoryStream();
+                            fs.CopyTo(ms);
+                            var bytes = ms.GetBuffer();
+                            model = NNConverter.Model.FromBytes(bytes);
+                        }
+
                         //Read glyphs file
-                        var glyphs = LoadGlyphs(settings.Glyphs);
+                        var glyphs = model == null? LoadGlyphs(settings.Glyphs) : model.Glyphs;
 
                         if (glyphs.Length == 0)
                             throw new Exception("No glyphs were present.");
 
-                        var converter = new SSIMConverter(new NoSSIMStore(), opts =>
+                        var converter = new SSIMConverter(opts =>
                         {
                             opts.FontSize = settings.TileSize;
                             opts.FontFace = settings.FontFace;
@@ -215,54 +186,71 @@ public class App : Command<AppSettings>
                             opts.InvertFont = settings.InvertFont;
                         });
 
-                        //Load model
-                        NeuralNetConverter.Model? model = null;
-
-                        if (!string.IsNullOrWhiteSpace(settings.Model) && File.Exists(settings.Model))
-                        {
-                            Log($"Reading model from {settings.Model}.");
-
-                            using var fs = new FileStream(settings.Model, FileMode.Open, FileAccess.Read);
-                            using var ms = new MemoryStream();
-                            fs.CopyTo(ms);
-                            var bytes = ms.GetBuffer();
-                            model = NeuralNetConverter.Model.FromBytes(bytes);
-                        }
-
                         Log("Training...");
 
                         //Train
-                        var preprocessed = LoadPreprocessed(settings.PreprocessedPath, glyphs);
+                        var preprocessed = LoadPreprocessed(settings.PreprocessedPath, glyphs, settings.Shuffle);
 
-                        foreach (var training_chunk in preprocessed.Chunk(50))
+                        var batches = preprocessed
+                            .Where(item => item.Intensities.Length == settings.TileSize * settings.TileSize)
+                            .Chunk(128)
+                            .GetEnumerator();
+
+                        for(int epoch = 0; batches.MoveNext(); epoch++)
                         {
                             if (stop > 0)
                                 break;
 
-                            if (NeuralNetConverter.Train(new()
+                            var training_set = new NNConverter.TrainingSet()
                             {
-                                FeatureSize = settings.TileSize * settings.TileSize,
-                                Glyphs = glyphs,
-                                HiddenLayers = 2,
-                                InitialModel = model,
-                                TrainingRate = 1,
-                                LearningRate = 1,
-                                LearningRateDecay = 0.05,
-                                TrainingData = training_chunk
-                            }, Log, LogNeuralNetData, out var trained, out var error_message))
+                                Epoch = epoch,
+                                Input = batches.Current,
+                                LearningRate = settings.LearningRate,
+                                LearningDecay = settings.LearningDecay,
+                                Threads = settings.Threads
+                            };
+
+                            if(model == null)
                             {
-                                model = trained;
-                            }
+                                if (NNConverter.Train(new NNConverter.ModelInitParams()
+                                {
+                                    FeatureCount = (uint)(settings.TileSize * settings.TileSize),
+                                    Glyphs = glyphs,
+                                    HiddenLayerCount = (uint)settings.HiddenLayers,
+                                    HiddenLayerNeuronCount = (uint)Math.Max(1, settings.HiddenNeurons),
+                                    Alpha = settings.ReLUAlpha
+                                }, training_set, Log, out var trained, out var error_message))
+                                {
+                                    model = trained;
+                                }
+                                else
+                                {
+                                    model = null;
+                                    throw new Exception($"Failed to train model. {error_message}");
+                                }
+                            } 
                             else
                             {
-                                model = null;
-                                throw new Exception($"Failed to train model. {error_message}");
+                                if (NNConverter.Train(model, training_set, Log, out var trained, out var error_message))
+                                {
+                                    model = trained;
+                                }
+                                else
+                                {
+                                    model = null;
+                                    throw new Exception($"Failed to train model. {error_message}");
+                                }
                             }
 
                             //Save current model state
-                            if(model != null && !string.IsNullOrWhiteSpace(settings.Model))
+                            if (model != null && !string.IsNullOrWhiteSpace(settings.Model))
                             {
-                                Log($"Writing model to {settings.Model}.");
+                                var model_dir = Path.GetDirectoryName(settings.Model);
+
+                                if (!string.IsNullOrWhiteSpace(model_dir) && !Directory.Exists(model_dir))
+                                    Directory.CreateDirectory(model_dir);
+
+                                //Log($"Writing model to {settings.Model}.");
                                 using var fs = new FileStream(settings.Model, FileMode.Create, FileAccess.ReadWrite);
                                 var model_bytes = model.ToBytes();
                                 fs.Write(model_bytes);
@@ -274,6 +262,11 @@ public class App : Command<AppSettings>
                     case Mode.render:
                     default:
                     {
+                        log_console = false;
+
+                        Log("Starting...");
+                        WriteGlyph(string.Empty);
+
                         //Read glyphs file
                         var glyphs = LoadGlyphs(settings.Glyphs);
 
@@ -287,7 +280,7 @@ public class App : Command<AppSettings>
                             case Method.model:
                             {
                                 //Load model
-                                NeuralNetConverter.Model? model = null;
+                                NNConverter.Model? model = null;
 
                                 if (!string.IsNullOrWhiteSpace(settings.Model) && File.Exists(settings.Model))
                                 {
@@ -297,19 +290,24 @@ public class App : Command<AppSettings>
                                     using var ms = new MemoryStream();
                                     fs.CopyTo(ms);
                                     var bytes = ms.GetBuffer();
-                                    model = NeuralNetConverter.Model.FromBytes(bytes);
+                                    model = NNConverter.Model.FromBytes(bytes);
                                 }
 
                                 if (model == null)
                                     throw new Exception($"Failed to find model at {settings.Model}");
 
-                                converter = new NeuralNetConverter(model);
+                                converter = new NNConverter(model, opts =>
+                                {
+                                    opts.FontSize = settings.TileSize;
+                                    opts.NoColor = settings.NoColor;
+                                    opts.InvertFont = settings.InvertFont;
+                                });
                             }
                             break;
                             case Method.ssim:
                             default:
                             {
-                                converter = new SSIMConverter(new NoSSIMStore(), opts =>
+                                converter = new SSIMConverter(opts =>
                                 {
                                     opts.FontSize = settings.TileSize;
                                     opts.FontFace = settings.FontFace;
@@ -352,12 +350,6 @@ public class App : Command<AppSettings>
                 Log(e.ToString(), true);
                 throw;
             }
-            finally
-            {
-                done.Release();
-            }
-
-            live_thread.Join();
         }
         catch
         {
@@ -379,19 +371,35 @@ public class App : Command<AppSettings>
     }
 
     //Read in solutions from file
-    private static IEnumerable<NeuralNetConverter.Input> LoadPreprocessed(string path, string[] glyphs)
+    private static IEnumerable<NNConverter.Input> LoadPreprocessed(string path, string[] glyphs, bool shuffle)
     {
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            List<string> preprocessed_files = [];
+        DirectoryInfo? temp_path = null;
 
-            if (File.Exists(path))
+        try
+        {
+            IEnumerable<string> preprocessed_files = File.Exists(path) ? [path]
+                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*.txt", SearchOption.AllDirectories)
+                : [];
+
+            if(shuffle)
             {
-                preprocessed_files.Add(path);
-            }
-            else if (Directory.Exists(path))
-            {
-                preprocessed_files.AddRange(Directory.EnumerateFiles(path, "*.txt", SearchOption.AllDirectories));
+                temp_path = Directory.CreateTempSubdirectory();
+                string shuffled = Path.Combine(temp_path.FullName, "preprocessed.txt");
+
+                //Write the lines of all provided files to one file, shuffled
+                using var fs = new FileStream(shuffled, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+                using var sw = new StreamWriter(fs);
+
+                foreach (var line in preprocessed_files
+                    .SelectMany(File.ReadAllLines)
+                    .OrderBy(_ => Random.Shared.Next())
+                    .ToArray())
+                    sw.WriteLine(line);
+
+                sw.Flush();
+                fs.Flush();
+
+                preprocessed_files = [shuffled];
             }
 
             foreach (var file in preprocessed_files)
@@ -440,6 +448,11 @@ public class App : Command<AppSettings>
                     }
                 }
             }
+        }
+        finally
+        {
+            //Delete the temp directory
+            temp_path?.Delete(true);
         }
 
         yield break;
