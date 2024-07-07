@@ -145,3 +145,4 @@ RandomImageGenerator/prompts.json
 model/model.nn
 ASCIIArt/glyphs-reduced.txt
 preprocessed/preprocessed-reduced.txt
+model/model-reduced.nn

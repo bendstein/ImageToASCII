@@ -322,16 +322,11 @@ public class NNConverter : IImageToASCIIConverter
                 {
                     token.ThrowIfCancellationRequested();
 
-                    DenseMatrix gradient = average_gradients[l];
-                    DenseVector bias_gradient = average_bias_gradients[l];
-                    DenseMatrix weights = model.Weights[l];
-                    DenseVector biases = model.Biases[l];
-
                     //Update biases
-                    biases -= learning_rate * bias_gradient;
+                    model.Biases[l] -= learning_rate * average_bias_gradients[l];
 
                     //Update weights
-                    weights -= learning_rate * gradient;
+                    model.Weights[l] -= learning_rate * average_gradients[l];
                 }
 
                 token.ThrowIfCancellationRequested();
@@ -783,12 +778,13 @@ public class NNConverter : IImageToASCIIConverter
         {
             get
             {
-                var sum = SSIMs.Sum();
+                //var sum = SSIMs.Sum();
 
-                if (sum == 0)
-                    return SSIMs;
+                //if (sum == 0)
+                //    return SSIMs;
 
-                return SSIMs.Select(s => s / sum).ToArray();
+                //return SSIMs.Select(s => s / sum).ToArray();
+                return NormalizedSoftmax(DenseVector.OfArray(SSIMs)).ToArray();
             }
         }
     }
