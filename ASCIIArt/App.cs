@@ -235,7 +235,8 @@ public class App : AsyncCommand<AppSettings>
                             LearningRate = settings.LearningRate,
                             LearningDecay = settings.LearningDecay,
                             Threads = settings.Threads,
-                            BatchSize = settings.BatchSize
+                            BatchSize = settings.BatchSize,
+                            Lambda = settings.Lambda
                         };
 
                         //Save the model to a file

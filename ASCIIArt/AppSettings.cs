@@ -129,6 +129,11 @@ public class AppSettings : CommandSettings
     [Description("The leak rate of leaky ReLU.")]
     public double ReLUAlpha { get; set; } = 0d;
 
+    [CommandOption("--lambda")]
+    [DefaultValue(0d)]
+    [Description("The L2 Regularization coefficient to use when updating gradients.")]
+    public double Lambda { get; set; } = 0d;
+
     [CommandOption("--hidden-layers")]
     [DefaultValue(0)]
     [Description("The number of inner layers in the neural net.")]

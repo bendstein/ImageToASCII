@@ -325,8 +325,8 @@ public class NNConverter : IImageToASCIIConverter
                     //Update biases
                     model.Biases[l] -= learning_rate * average_bias_gradients[l];
 
-                    //Update weights
-                    model.Weights[l] -= learning_rate * average_gradients[l];
+                    //Update weights (w/ L2 Regularization)
+                    model.Weights[l] -= learning_rate * (average_gradients[l] + (training_set.Lambda * model.Weights[l]));
                 }
 
                 token.ThrowIfCancellationRequested();
@@ -488,7 +488,7 @@ public class NNConverter : IImageToASCIIConverter
     /// <summary>
     /// A trained neural network to classify an image tile as an ASCII glyph.
     /// </summary>
-    public class Model
+    public class Model : IEquatable<Model?>
     {
         /// <summary>
         /// The glyphs available for classification, one-hot encoded
@@ -689,6 +689,34 @@ public class NNConverter : IImageToASCIIConverter
             return new(glyphs, alpha, weights, biases);
         }
 
+        public override bool Equals(object? obj)
+        {
+            return Equals(obj as Model);
+        }
+
+        public bool Equals(Model? other)
+        {
+            return other is not null &&
+                Glyphs.SequenceEqual(other.Glyphs) &&
+                Weights.SequenceEqual(other.Weights) &&
+                Biases.SequenceEqual(other.Biases) &&
+                Alpha == other.Alpha;
+        }
+
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(Glyphs, Weights, Biases, Alpha);
+        }
+
+        public static bool operator ==(Model? left, Model? right)
+        {
+            return (left is null == right is null) && (left is null || left.Equals(right));
+        }
+
+        public static bool operator !=(Model? left, Model? right)
+        {
+            return !(left == right);
+        }
     }
 
     /// <summary>
@@ -747,6 +775,11 @@ public class NNConverter : IImageToASCIIConverter
         /// The number of training examples to be batched together.
         /// </summary>
         public int BatchSize { get; set; } = 1;
+
+        /// <summary>
+        /// L2 Regularization coefficient
+        /// </summary>
+        public double Lambda { get; set; } = 0;
 
         /// <summary>
         /// The training examples.

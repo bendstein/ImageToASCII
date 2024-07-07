@@ -37,6 +37,7 @@ Arguments that only apply for --mode train
 - --hidden-layers: Number of hidden layers to include in neural net
 - --hidden-neurons: The number of neurons to include in each hidden layer
 - --batch-size: Train neural net on mini-batches of this size
+- --lamda: The L2 Regularization coefficient to use when updating gradients
 
 ### Other Arguments
 - -g, --glyphs: The path to the glyphs.txt file, if not using the default
