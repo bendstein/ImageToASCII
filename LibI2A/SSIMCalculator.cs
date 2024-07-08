@@ -4,7 +4,7 @@ public class SSIMCalculator
 {
     private readonly Options options;
 
-    private static readonly (double H, double S, double V) HSV_WEIGHTS = (1, 1.2d, 1.1d);
+    private static readonly (double H, double S, double V) HSV_WEIGHTS = (1, 1.8d, 1.1d);
 
     public SSIMCalculator(Action<Options>? configure = null)
     {
@@ -119,8 +119,8 @@ public class SSIMCalculator
             //Calculate SSIM for subtile, and weight by gaussian
             if (subtile_a != null && subtile_b != null)
             {
-                double[] intensities_a = image_a.GetIntensities().ToArray();
-                double[] intensities_b = image_b.GetIntensities().ToArray();
+                double[] intensities_a = [.. image_a.GetIntensities()];
+                double[] intensities_b = [.. image_b.GetIntensities()];
 
                 ssim_sum += W(t) * CalculateSubtile(subtile_a, subtile_b);
             }

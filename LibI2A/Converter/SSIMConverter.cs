@@ -259,7 +259,7 @@ public class SSIMConverter : IImageToASCIIConverter
             //Print best match
             Write(glyph, combined);
 
-            double[] intensities = tile.GetIntensities().ToArray();
+            double[] intensities = [.. tile.GetIntensities()];
 
             yield return (intensities, glyphs.Select(g => (g.Key, g.Value)).ToArray());
         }

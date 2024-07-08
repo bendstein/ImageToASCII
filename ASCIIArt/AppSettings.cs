@@ -9,7 +9,6 @@ public class AppSettings : CommandSettings
         FONT_FACE_DEFAULT = "Consolas",
         MODE_DEFAULT = "render",
         METHOD_DEFAULT = "ssim",
-        PREPROCESS_PATH_DEFAULT = "preprocessed/preprocessed.txt",
         MODEL_PATH_DEFAULT = "model/model.nn";
 
     public const int
@@ -49,6 +48,11 @@ public class AppSettings : CommandSettings
     [DefaultValue(false)]
     [Description("Calculate SSIM using white-on-black glyphs instead of black-on-white.")]
     public bool InvertFont { get; set; } = false;
+
+    [CommandOption("--create-glyphs")]
+    [DefaultValue(false)]
+    [Description("Create glyphs.txt.")]
+    public bool CreateGlyphs { get; set; } = false;
 
     [CommandOption("-c|--clamp")]
     [Description("Clamp the resulting image to Width,Height characters.")]
@@ -105,9 +109,9 @@ public class AppSettings : CommandSettings
     }
 
     [CommandOption("--preprocess")]
-    [DefaultValue(PREPROCESS_PATH_DEFAULT)]
+    [DefaultValue("")]
     [Description("Pull preprocessed data from this file/directory when in training mode. Output results to this file in preprocessing mode.")]
-    public string PreprocessPath { get; set; } = PREPROCESS_PATH_DEFAULT;
+    public string PreprocessPath { get; set; } = string.Empty;
 
     [CommandOption("--shuffle")]
     [DefaultValue(false)]

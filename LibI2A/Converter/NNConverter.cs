@@ -865,7 +865,7 @@ public class NNConverter : IImageToASCIIConverter
             Bias1 = new DenseVector[model.Weights.Length];
             Bias2 = new DenseVector[model.Weights.Length];
 
-            //Init all values to 0z
+            //Init all values to 0
             for(int i = 0; i < model.Weights.Length; i++)
             {
                 Moment1[i] = new DenseMatrix(model.Weights[i].RowCount, model.Weights[i].ColumnCount);

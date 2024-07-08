@@ -15,7 +15,10 @@ public static class MagickExtensions
             Utils.ScaleUShort(color.B)));
 
         //Weight HSV components
-        (uint a, double, double, double) weighted = (hsv.a, hsv.h * HSVWeights.H, hsv.s * HSVWeights.S, hsv.v * HSVWeights.V);
+        (uint a, double, double, double) weighted = (hsv.a, 
+            double.Clamp(hsv.h * HSVWeights.H, 0, 1),
+            double.Clamp(hsv.s * HSVWeights.S, 0, 1),
+            double.Clamp(hsv.v * HSVWeights.V, 0, 1));
 
         //Convert back to rgb
         (uint a, uint r, uint g, uint b) rgb = Utils.AHSVToARGB(weighted);

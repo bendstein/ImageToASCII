@@ -1,6 +1,7 @@
 ﻿using LibI2A;
 using LibI2A.Common;
 using LibI2A.Converter;
+using Newtonsoft.Json.Linq;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -84,6 +85,24 @@ public class App : AsyncCommand<AppSettings>
             {
                 token.ThrowIfCancellationRequested();
 
+                if(settings.CreateGlyphs)
+                {
+                    Log($"Creating {settings.Glyphs}.");
+
+                    List<char> chars = [];
+                    for(byte i = 0; i < byte.MaxValue; i++)
+                    {
+                        char c = (char)i;
+
+                        if (!char.IsWhiteSpace(c) && !char.IsControl(c) && char.IsAscii(c))
+                            chars.Add(c);
+                    }
+
+                    await SaveGlyphsAsync(settings.Glyphs, chars.Select(c => c.ToString()), token);
+
+                    Log($"Successfully created {settings.Glyphs}.");
+                }
+
                 switch (settings.Mode)
                 {
                     //Preprocess images
@@ -126,49 +145,20 @@ public class App : AsyncCommand<AppSettings>
                         using FileStream preprocess_file_stream = new(settings.PreprocessPath, FileMode.OpenOrCreate, FileAccess.Write);
                         using StreamWriter preprocess_file_writer = new(preprocess_file_stream);
 
-                        IEnumerable<string> paths = [];
-
-                        //Process each file
-                        foreach (string? file in settings.Path.SelectMany(path =>
-                        {
-                            return File.Exists(path)
-                                ? (new string[] { path })
-                                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([]);
-                        }).Distinct())
+                        //Process each file, and write their SSIM data to a file
+                        foreach(var solution in ProcessImages(converter, settings.Path, WriteGlyph))
                         {
                             if (token.IsCancellationRequested)
-                            {
                                 break;
-                            }
 
-                            Log($"Preprocessing image {file}...");
-                            using FileStream fs = new(file, FileMode.Open, FileAccess.Read);
-
-                            int s = 0;
-
-                            //Write each solution to preprocess file
-                            foreach ((double[] intensities, (string glyph, double ssim)[] scores) solution in converter.ProcessImage(fs, WriteGlyph))
-                            {
-                                if (token.IsCancellationRequested)
-                                {
-                                    break;
-                                }
-
-                                if (s > 0 && s % 100 == 0)
-                                {
-                                    Log($"Preprocessing image {file}...");
-                                }
-
-                                preprocess_file_writer.WriteLine($"{string.Join(',', solution.intensities.Select(i => Utils.Round(i, PREPROCESS_PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
-                                s++;
-                            }
+                            preprocess_file_writer.WriteLine($"{string.Join(',', solution.intensities.Select(i => Utils.Round(i, PREPROCESS_PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
                         }
 
                         preprocess_file_writer.Flush();
                         preprocess_file_stream.Flush();
                     }
                     break;
-                    //Train on preprocessed images
+                    //Train on processed images
                     case Mode.train:
                     {
                         token.ThrowIfCancellationRequested();
@@ -210,23 +200,53 @@ public class App : AsyncCommand<AppSettings>
                             Alpha = settings.ReLUAlpha
                         });
 
-                        SSIMConverter converter = new(opts =>
-                        {
-                            opts.FontSize = settings.TileSize;
-                            opts.FontFace = settings.FontFace;
-                            opts.Subdivide = settings.SubDivide;
-                            opts.ParallelCalculate = settings.Threads;
-                            opts.Glyphs = glyphs;
-                            opts.InvertFont = settings.InvertFont;
-                        });
-
                         Log("Training...");
 
                         token.ThrowIfCancellationRequested();
 
-                        //Train
-                        IEnumerable<NNConverter.Input> training_input = LoadPreprocessed(settings.PreprocessPath, glyphs, settings.Shuffle)
-                            .Where(item => item.Intensities.Length == settings.TileSize * settings.TileSize
+                        //Get training set
+                        IEnumerable<NNConverter.Input> training_input = [];
+
+                        if(string.IsNullOrWhiteSpace(settings.PreprocessPath))
+                        {
+                            //Train on data while it's converted
+                            SSIMConverter converter = new(opts =>
+                            {
+                                opts.FontSize = settings.TileSize;
+                                opts.FontFace = settings.FontFace;
+                                opts.Subdivide = settings.SubDivide;
+                                opts.ParallelCalculate = settings.Threads;
+                                opts.Glyphs = glyphs;
+                                opts.InvertFont = settings.InvertFont;
+                            });
+
+                            //Process each file, and yield the training data
+                            IEnumerable<NNConverter.Input> GetImageData()
+                            {
+                                foreach (var solution in ProcessImages(converter, settings.Path, (_, _) => { }))
+                                {
+                                    if (token.IsCancellationRequested)
+                                        break;
+
+                                    yield return new NNConverter.Input()
+                                    {
+                                        Intensities = solution.intensities,
+                                        SSIMs = solution.scores.Select(s => s.ssim).ToArray()
+                                    };
+                                }
+
+                                yield break;
+                            }
+
+                            training_input = GetImageData();
+                        }
+                        else
+                        {
+                            //Load preprocessed data
+                            training_input = LoadPreprocessed(settings.PreprocessPath, glyphs, settings.Shuffle);
+                        }
+
+                        training_input = training_input.Where(item => item.Intensities.Length == settings.TileSize * settings.TileSize
                                 && item.SSIMs.Length == model.Glyphs.Length);
 
                         NNConverter.TrainingSet training_set = new()
@@ -357,23 +377,9 @@ public class App : AsyncCommand<AppSettings>
                             break;
                         }
 
-                        //Process each file
-                        foreach (string? file in settings.Path.SelectMany(path =>
-                        {
-                            return File.Exists(path)
-                                ? (new string[] { path })
-                                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([]);
-                        }).Distinct())
-                        {
-                            token.ThrowIfCancellationRequested();
-
-                            using FileStream fs = new(file, FileMode.Open, FileAccess.ReadWrite);
-
-                            foreach ((string? glyph, uint? color) in converter.ConvertImage(fs))
-                            {
-                                WriteGlyph(glyph, color);
-                            }
-                        }
+                        //Process and render each image
+                        foreach((string glyph, uint? color) in ConvertImages(converter, settings.Path))
+                            WriteGlyph(glyph, color);
                     }
                     break;
                 }
@@ -398,12 +404,27 @@ public class App : AsyncCommand<AppSettings>
         await using FileStream fs = new(path, FileMode.Open, FileAccess.Read);
         using StreamReader sr = new(fs);
 
-        string[] glyphs = sr.ReadToEnd().Split(Environment.NewLine)
+        token.ThrowIfCancellationRequested();
+
+        string[] glyphs = (await sr.ReadToEndAsync(token))
+            .Split(Environment.NewLine)
             .Where(line => line.Length > 0)
             .Distinct()
             .ToArray();
 
         return glyphs;
+    }
+
+    private static async Task SaveGlyphsAsync(string path, IEnumerable<string> glyphs, CancellationToken token = default)
+    {
+        //Write glyphs file
+        await using FileStream fs = new(path, FileMode.OpenOrCreate, FileAccess.Write);
+        using StreamWriter sw = new(fs);
+
+        token.ThrowIfCancellationRequested();
+
+        foreach (var glyph in glyphs)
+            await sw.WriteLineAsync(glyph);
     }
 
     //Read in solutions from file
@@ -491,6 +512,48 @@ public class App : AsyncCommand<AppSettings>
         {
             //Delete the temp directory
             temp_path?.Delete(true);
+        }
+
+        yield break;
+    }
+
+    private static IEnumerable<(string glyph, uint? color)> ConvertImages(IImageToASCIIConverter converter, IEnumerable<string> paths)
+    {
+        //Process each file
+        foreach (string? file in paths.SelectMany(path =>
+        {
+            return File.Exists(path)
+                ? (new string[] { path })
+                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([]);
+        }).Distinct())
+        {
+            using FileStream fs = new(file, FileMode.Open, FileAccess.ReadWrite);
+
+            foreach (var pair in converter.ConvertImage(fs))
+            {
+                yield return pair; 
+            }
+        }
+
+        yield break;
+    }
+
+    private static IEnumerable<(double[] intensities, (string glyph, double ssim)[] scores)> ProcessImages(SSIMConverter converter, IEnumerable<string> paths,
+        Action<string, uint?>? writer = null)
+    {
+        //Process each file
+        foreach (string? file in paths.SelectMany(path =>
+        {
+            return File.Exists(path)
+                ? (new string[] { path })
+                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([]);
+        }).Distinct())
+        {
+            using FileStream fs = new(file, FileMode.Open, FileAccess.Read);
+
+            //Write each solution to preprocess file
+            foreach (var solution in converter.ProcessImage(fs, writer))
+                yield return solution;
         }
 
         yield break;
