@@ -12,7 +12,7 @@ public class AppSettings : CommandSettings
         MODEL_PATH_DEFAULT = "model/model.nn";
 
     public const int
-        TILE_SIZE_DEFAULT = 4,
+        TILE_SIZE_DEFAULT = 8,
         THREADS_DEFAULT = 8;
 
     [CommandArgument(0, "[path]")]

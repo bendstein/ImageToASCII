@@ -38,11 +38,9 @@ public class App : AsyncCommand<AppSettings>
             string full_message = $"{DateTime.Now:HH:mm:ss.ffff} {(is_error ? "ERROR | " : "INFO  | ")} {message}";
 
             if (log_console)
-            {
                 Console.WriteLine(full_message);
-            }
 
-            log_writer.WriteLine(full_message);
+            //log_writer.WriteLine(full_message);
         }
 
         void WriteGlyph(string glyph, uint? color = null)

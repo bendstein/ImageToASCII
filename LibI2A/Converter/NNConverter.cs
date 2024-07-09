@@ -3,6 +3,7 @@ using LibI2A.Common;
 using MathNet.Numerics.LinearAlgebra.Double;
 using MathNet.Numerics.Statistics;
 using OneOf;
+using System.Linq;
 using System.Text;
 
 namespace LibI2A.Converter;
@@ -19,7 +20,7 @@ public class NNConverter : IImageToASCIIConverter
     private const double EPS = 0.00001d;
 
     /// <summary>
-    /// Epsilon for Adam calculation to prevent /0
+    /// Epsilon for Adam calculation to prevent div by 0
     /// </summary>
     private const double ADAM_EPS = 0.0000001d;
 
@@ -27,8 +28,8 @@ public class NNConverter : IImageToASCIIConverter
     /// Clamp gradients to this range
     /// </summary>
     private const double
-        GRADIENT_MAX = 25d,
-        GRADIENT_MIN = -25d;
+        GRADIENT_MAX = 2d,
+        GRADIENT_MIN = -2d;
 
     /// <summary>
     /// The trained neural net to use for predictions
@@ -450,26 +451,29 @@ public class NNConverter : IImageToASCIIConverter
         for(int l = 0; l < model.Weights.Length; l++)
         {
             //Update first moment
-            adam.Moment1[l] = adam.Decay.A * adam.Moment1[l] + (1 - adam.Decay.A) * gradients[l];
-            adam.Bias1[l] = adam.Decay.A * adam.Bias1[l] + (1 - adam.Decay.A) * bias_gradients[l];
+            adam.Moment1[l] = adam.Decay.Beta1 * adam.Moment1[l] + (1 - adam.Decay.Beta1) * gradients[l];
+            adam.Bias1[l] = adam.Decay.Beta1 * adam.Bias1[l] + (1 - adam.Decay.Beta1) * bias_gradients[l];
 
             //Update second moment
-            adam.Moment2[l] = (DenseMatrix)(adam.Decay.B * adam.Moment2[l] + (1 - adam.Decay.B) * gradients[l].PointwiseMultiply(gradients[l]));
-            adam.Bias2[l] = (DenseVector)(adam.Decay.B * adam.Bias2[l] + (1 - adam.Decay.B) * bias_gradients[l].PointwiseMultiply(bias_gradients[l]));
+            adam.Moment2[l] = (DenseMatrix)(adam.Decay.Beta2 * adam.Moment2[l] + (1 - adam.Decay.Beta2) * gradients[l].PointwiseMultiply(gradients[l]));
+            adam.Bias2[l] = (DenseVector)(adam.Decay.Beta2 * adam.Bias2[l] + (1 - adam.Decay.Beta2) * bias_gradients[l].PointwiseMultiply(bias_gradients[l]));
 
             //Compute bias-corrected first moment
-            var moment1_corrected = adam.Moment1[l] / (1 - Math.Pow(adam.Decay.A, epoch + 1));
-            var bias1_corrected = adam.Bias1[l] / (1 - Math.Pow(adam.Decay.A, epoch + 1));
+            var moment1_corrected = adam.Moment1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
+            var bias1_corrected = adam.Bias1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
 
             //Compute bias-corrected second moment
-            var moment2_corrected = adam.Moment2[l] / (1 - Math.Pow(adam.Decay.B, epoch + 1));
-            var bias2_corrected = adam.Bias2[l] / (1 - Math.Pow(adam.Decay.B, epoch + 1));
+            var moment2_corrected = adam.Moment2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
+            var bias2_corrected = adam.Bias2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
 
             var adam_learning_rate = moment1_corrected.PointwiseDivide(moment2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
             var adam_bias_learning_rate = bias1_corrected.PointwiseDivide(bias2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
 
+            //L2 Regularization
+            adam_learning_rate += l2_coeff * model.Weights[l];
+
             //Update weights and biases
-            model.Weights[l] -= (DenseMatrix)(adam.LearningRate * (adam_learning_rate + l2_coeff * model.Weights[l]));
+            model.Weights[l] -= (DenseMatrix)(adam.LearningRate * adam_learning_rate);
             model.Biases[l] -= (DenseVector)(adam.LearningRate * adam_bias_learning_rate);
         }
     }
@@ -833,7 +837,7 @@ public class NNConverter : IImageToASCIIConverter
         /// <summary>
         /// Exponential decay rates for each step
         /// </summary>
-        public (double A, double B) Decay { get; set; } = (0d, 0d);
+        public (double Beta1, double Beta2) Decay { get; set; } = (0d, 0d);
 
         /// <summary>
         /// Gradients
@@ -881,6 +885,11 @@ public class NNConverter : IImageToASCIIConverter
     /// </summary>
     public class Input
     {
+        private const double
+            PENALTY = -100d,
+            COERCE_TO_ZERO = 0.0001,
+            STD_DEV = 0.1d;
+
         /// <summary>
         /// The intensities of each pixel in this image tile.
         /// </summary>
@@ -910,9 +919,33 @@ public class NNConverter : IImageToASCIIConverter
         public double[] SSIMs { get; set; } = [];
 
         /// <summary>
-        /// The SSIMs, normalized using softmax to match model output
-        /// </summary>
-        public double[] NormalizedSSIMs => NormalizedSoftmax(DenseVector.OfArray(SSIMs)).ToArray();
+        /// The SSIMs, gaussian weighted by their distance from the max
+        ///</summary>
+        public double[] NormalizedSSIMs
+        {
+            get
+            {
+                var max = SSIMs.Max();
+
+                if (max == 0)
+                    return SSIMs;
+
+                //Get gaussian weights based on percentage of max
+                var weights = DenseVector.OfEnumerable(SSIMs.Select(s => Math.Exp(-Math.Pow(s / max - 1, 2) / (2 * STD_DEV * STD_DEV)) / (Math.Sqrt(2 * Math.PI) * STD_DEV)));
+
+                //Penalize based on percentage of max
+                var penalized = weights.PointwiseMultiply(DenseVector.OfArray(SSIMs))
+                    .Map(s => s <= COERCE_TO_ZERO ? 0 : s);
+
+                //Divide by sum to add up to 1
+                var sum = penalized.Sum();
+
+                if (sum == 0)
+                    return [.. penalized];
+
+                return penalized.Select(p => p / sum).ToArray();
+            }
+        }
     }
 
     /// <summary>
