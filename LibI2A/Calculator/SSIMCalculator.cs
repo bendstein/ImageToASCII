@@ -1,22 +1,31 @@
-﻿namespace LibI2A;
+﻿using LibI2A.Common;
 
-public class SSIMCalculator
+namespace LibI2A.Calculator;
+
+public class SSIMCalculator : ISSIMCalculator
 {
     private readonly Options options;
 
+    private readonly Dictionary<string, PixelImage> glyph_images = [];
+
     private static readonly (double H, double S, double V) HSV_WEIGHTS = (1, 1.8d, 1.1d);
 
-    public SSIMCalculator(Action<Options>? configure = null)
+    public SSIMCalculator(Dictionary<string, PixelImage> glyph_images, Action<Options>? configure = null)
     {
+        this.glyph_images = glyph_images;
         Options options = new();
         configure?.Invoke(options);
         this.options = options;
     }
 
-    public SSIMCalculator(Options options)
+    public SSIMCalculator(Dictionary<string, PixelImage> glyph_images, Options options)
     {
+        this.glyph_images = glyph_images;
         this.options = options;
     }
+
+    public double CalculateSSIM(PixelImage image, string glyph)
+        => Calculate(image, glyph_images[glyph]);
 
     public double Calculate(PixelImage image_a, PixelImage image_b)
     {
@@ -80,11 +89,11 @@ public class SSIMCalculator
             double w3 = options.Weights.W3;
 
             //Calculate local SSIM
-            double ssim = ((w1 * (2 * mean.a * mean.b)) + c1)
-                * ((w3 * (2 * covar)) + c2)
+            double ssim = (w1 * (2 * mean.a * mean.b) + c1)
+                * (w3 * (2 * covar) + c2)
                 /
-                (((w1 * (Math.Pow(mean.a, 2) + Math.Pow(mean.b, 2))) + c1)
-                * ((w2 * (Math.Pow(stddev.a, 2) + Math.Pow(stddev.b, 2))) + c2));
+                ((w1 * (Math.Pow(mean.a, 2) + Math.Pow(mean.b, 2)) + c1)
+                * (w2 * (Math.Pow(stddev.a, 2) + Math.Pow(stddev.b, 2)) + c2));
 
             return ssim;
         }
@@ -155,7 +164,7 @@ public class SSIMCalculator
 
                 sum += value;
 
-                gaussian[(w * j) + i] = value;
+                gaussian[w * j + i] = value;
             }
         }
 

@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ShuffleFile": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\preprocessed\\preprocessed.txt\r\nC:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\preprocessed\\shuffled.txt"
+    }
+  }
+}

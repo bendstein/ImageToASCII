@@ -25,11 +25,22 @@ public class NNConverter : IImageToASCIIConverter
     private const double ADAM_EPS = 0.0000001d;
 
     /// <summary>
+    /// Allow a choice of any glyph within this of
+    /// the best pick
+    /// </summary>
+    private const double PREDICTION_RANGE = 0.005d;
+
+    /// <summary>
+    /// For prediction, bucket hue to groups of this size
+    /// </summary>
+    private const int HUE_BUCKET = 25;
+
+    /// <summary>
     /// Clamp gradients to this range
     /// </summary>
     private const double
-        GRADIENT_MAX = 2d,
-        GRADIENT_MIN = -2d;
+        GRADIENT_MAX = 5d,
+        GRADIENT_MIN = -5d;
 
     /// <summary>
     /// The trained neural net to use for predictions
@@ -83,6 +94,10 @@ public class NNConverter : IImageToASCIIConverter
         int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
         int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
 
+        //Keep track of choices
+        Dictionary<string, string> color_choices = [];
+        var skips = new int[model.Glyphs.Length];
+
         int n = 0;
 
         foreach (PixelImage tile in pixel_image.Tiles(options.FontSize, options.FontSize))
@@ -103,6 +118,7 @@ public class NNConverter : IImageToASCIIConverter
                 .ToList();
 
             uint combined = 0;
+            uint hue_bucket = 0;
 
             if (colors.Count > 0)
             {
@@ -111,37 +127,63 @@ public class NNConverter : IImageToASCIIConverter
                     sums.h / colors.Count,
                     sums.s / colors.Count,
                     sums.v / colors.Count);
+                var argb = Utils.AHSVToARGB(avgs);
                 combined = Utils.ToUInt(Utils.AHSVToARGB(avgs));
+
+                hue_bucket = (uint)Math.Round(avgs.Item2 * byte.MaxValue) / HUE_BUCKET * HUE_BUCKET;
             }
 
             //Predict the glyph that is most likely
-            string glyph = PredictGlyph(tile);
+            DenseVector[] activations = PropagateForwards(model, new Input()
+            {
+                Intensities = [.. tile.GetIntensities()],
+            });
+
+            DenseVector output = activations[^1];
+
+            //Get highest probability
+            var highest_probability = output.Max();
+
+            //Get potential glyphs
+            var choices = output.Select((n, ndx) => (n, ndx, glyph: model.Glyphs[ndx]))
+                .Where(pair => highest_probability - pair.n < PREDICTION_RANGE)
+                .OrderByDescending(pair => pair.glyph)
+                .ToList();
+
+            //Encode potential choices
+            var encoded_choices = $"{hue_bucket};{string.Join(';', choices.Select(c => c.glyph))}";
+
+            //If a glyph was already chosen for this color / choice combo, use that
+            if(!color_choices.TryGetValue(encoded_choices, out var glyph))
+            {
+                //Choose glyph based on probability and number of times it wasn't chosen
+                glyph = choices.OrderByDescending(c => skips[c.ndx])
+                    .ThenByDescending(c => c.n)
+                    .ThenBy(c => Random.Shared.Next())
+                    .FirstOrDefault().glyph;
+
+                //Choose a random glyph from the given class
+                if(options.GlyphClasses.TryGetValue(glyph, out var glyph_class) && glyph_class.Length > 0)
+                    glyph = glyph_class[Random.Shared.Next(glyph_class.Length)];
+
+                //Record selected choice
+                color_choices[encoded_choices] = glyph;
+
+                //Increment skips for non-selected glyphs
+                foreach(var choice in choices)
+                {
+                    if (choice.glyph == glyph)
+                        skips[choice.ndx] = 0;
+                    else
+                        skips[choice.ndx]++;
+                }
+            }
 
             yield return (glyph, combined);
             n++;
         }
 
         yield break;
-    }
-
-    /// <summary>
-    /// Predict the best-matching glyph for the tile
-    /// </summary>
-    /// <param name="tile"></param>
-    /// <returns></returns>
-    private string PredictGlyph(PixelImage tile)
-    {
-        DenseVector[] activations = PropagateForwards(model, new Input()
-        {
-            Intensities = [.. tile.GetIntensities()],
-        });
-
-        DenseVector output = activations[^1];
-
-        //Select glyph with highest probability
-        return output.Select((n, ndx) => (n, glyph: model.Glyphs[ndx]))
-            .MaxBy(pair => pair.n)
-            .glyph;
     }
 
     /// <summary>
@@ -886,9 +928,8 @@ public class NNConverter : IImageToASCIIConverter
     public class Input
     {
         private const double
-            PENALTY = -100d,
             COERCE_TO_ZERO = 0.0001,
-            STD_DEV = 0.1d;
+            MAX_DISTANCE = 0.03d;
 
         /// <summary>
         /// The intensities of each pixel in this image tile.
@@ -930,12 +971,9 @@ public class NNConverter : IImageToASCIIConverter
                 if (max == 0)
                     return SSIMs;
 
-                //Get gaussian weights based on percentage of max
-                var weights = DenseVector.OfEnumerable(SSIMs.Select(s => Math.Exp(-Math.Pow(s / max - 1, 2) / (2 * STD_DEV * STD_DEV)) / (Math.Sqrt(2 * Math.PI) * STD_DEV)));
-
-                //Penalize based on percentage of max
-                var penalized = weights.PointwiseMultiply(DenseVector.OfArray(SSIMs))
-                    .Map(s => s <= COERCE_TO_ZERO ? 0 : s);
+                //If SSIM is further than {MAX_DISTANCE} percent away from the max, make 0
+                var penalized = SSIMs.Select(s => (max - s) / max < MAX_DISTANCE? s : 0)
+                    .Select(s => s <= COERCE_TO_ZERO ? 0 : s);
 
                 //Divide by sum to add up to 1
                 var sum = penalized.Sum();
@@ -962,6 +1000,11 @@ public class NNConverter : IImageToASCIIConverter
         /// The tile/font size to use
         /// </summary>
         public int FontSize { get; set; } = 16;
+
+        /// <summary>
+        /// Glyphs that are equivalent for the purposes of SSIM
+        /// </summary>
+        public Dictionary<string, string[]> GlyphClasses = [];
     }
 
     /// <summary>

@@ -1,4 +1,6 @@
-﻿using LibI2A;
+﻿using ImageMagick;
+using LibI2A;
+using LibI2A.Calculator;
 using LibI2A.Common;
 using LibI2A.Converter;
 using Newtonsoft.Json.Linq;
@@ -17,6 +19,9 @@ public class App : AsyncCommand<AppSettings>
     private const int
         LIVE_UPDATE = 250,
         PREPROCESS_PRECISION = 8;
+
+    private const double
+        CREATE_GLYPH_CLASSES_CONFIDENCE = 0.035d;
 
     public override async Task<int> ExecuteAsync(CommandContext context, AppSettings settings)
     {
@@ -96,7 +101,7 @@ public class App : AsyncCommand<AppSettings>
                             chars.Add(c);
                     }
 
-                    await SaveGlyphsAsync(settings.Glyphs, chars.Select(c => c.ToString()), token);
+                    await CreateGlyphsAsync(chars.Select(c => c.ToString()), settings.Glyphs, settings, token);
 
                     Log($"Successfully created {settings.Glyphs}.");
                 }
@@ -112,23 +117,29 @@ public class App : AsyncCommand<AppSettings>
                         WriteGlyph(string.Empty);
 
                         //Read glyphs file
-                        string[] glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
+                        var glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
 
                         token.ThrowIfCancellationRequested();
 
-                        if (glyphs.Length == 0)
+                        if (glyphs.Count == 0)
                         {
                             throw new Exception("No glyphs were present.");
                         }
 
-                        SSIMConverter converter = new(opts =>
+                        var glyph_images = Utils.GetGlyphImages([.. glyphs.Keys], settings.TileSize, settings.FontFace, settings.InvertFont)
+                                    .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
+
+                        var calculator = new SSIMCalculator(glyph_images, configure =>
+                        {
+                            configure.Subdivide = settings.SubDivide;
+                            configure.GaussianStdDev = 1.5d;
+                        });
+
+                        SSIMConverter converter = new(calculator, opts =>
                         {
                             opts.FontSize = settings.TileSize;
-                            opts.FontFace = settings.FontFace;
-                            opts.Subdivide = settings.SubDivide;
                             opts.ParallelCalculate = settings.Threads;
-                            opts.Glyphs = glyphs;
-                            opts.InvertFont = settings.InvertFont;
+                            opts.GlyphClasses = glyphs;
                         });
 
                         string? preprocess_dir = Path.GetDirectoryName(settings.PreprocessPath);
@@ -181,18 +192,16 @@ public class App : AsyncCommand<AppSettings>
                         }
 
                         //Read glyphs file
-                        string[] glyphs = model == null ? await LoadGlyphsAsync(settings.Glyphs, token) : model.Glyphs;
+                        var glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
 
-                        if (glyphs.Length == 0)
-                        {
+                        if (glyphs.Count == 0)
                             throw new Exception("No glyphs were present.");
-                        }
 
                         //Init model if not already present
                         model ??= new NNConverter.Model(new NNConverter.ModelInitParams()
                         {
                             FeatureCount = (uint)(settings.TileSize * settings.TileSize),
-                            Glyphs = glyphs,
+                            Glyphs = glyphs.Keys.ToArray(),
                             HiddenLayerCount = (uint)settings.HiddenLayers,
                             HiddenLayerNeuronCount = (uint)Math.Max(1, settings.HiddenNeurons),
                             Alpha = settings.ReLUAlpha
@@ -207,15 +216,21 @@ public class App : AsyncCommand<AppSettings>
 
                         if(string.IsNullOrWhiteSpace(settings.PreprocessPath))
                         {
+                            var glyph_images = Utils.GetGlyphImages([.. glyphs.Keys], settings.TileSize, settings.FontFace, settings.InvertFont)
+                                .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
+
+                            var calculator = new SSIMCalculator(glyph_images, configure =>
+                            {
+                                configure.Subdivide = settings.SubDivide;
+                                configure.GaussianStdDev = 1.5d;
+                            });
+
                             //Train on data while it's converted
-                            SSIMConverter converter = new(opts =>
+                            SSIMConverter converter = new(calculator, opts =>
                             {
                                 opts.FontSize = settings.TileSize;
-                                opts.FontFace = settings.FontFace;
-                                opts.Subdivide = settings.SubDivide;
                                 opts.ParallelCalculate = settings.Threads;
-                                opts.Glyphs = glyphs;
-                                opts.InvertFont = settings.InvertFont;
+                                opts.GlyphClasses = glyphs;
                             });
 
                             //Process each file, and yield the training data
@@ -241,7 +256,7 @@ public class App : AsyncCommand<AppSettings>
                         else
                         {
                             //Load preprocessed data
-                            training_input = LoadPreprocessed(settings.PreprocessPath, glyphs, settings.Shuffle);
+                            training_input = LoadPreprocessed(settings.PreprocessPath, [.. glyphs.Keys], settings.Shuffle);
                         }
 
                         training_input = training_input.Where(item => item.Intensities.Length == settings.TileSize * settings.TileSize
@@ -318,12 +333,10 @@ public class App : AsyncCommand<AppSettings>
                         WriteGlyph(string.Empty);
 
                         //Read glyphs file
-                        string[] glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
+                        var glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
 
-                        if (glyphs.Length == 0)
-                        {
+                        if (glyphs.Count == 0)
                             throw new Exception("No glyphs were present.");
-                        }
 
                         IImageToASCIIConverter converter;
 
@@ -362,14 +375,20 @@ public class App : AsyncCommand<AppSettings>
                             case Method.ssim:
                             default:
                             {
-                                converter = new SSIMConverter(opts =>
+                                var glyph_images = Utils.GetGlyphImages([..glyphs.Keys], settings.TileSize, settings.FontFace, settings.InvertFont)
+                                    .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
+
+                                var calculator = new SSIMCalculator(glyph_images, configure =>
+                                {
+                                    configure.Subdivide = settings.SubDivide;
+                                    configure.GaussianStdDev = 1.5d;
+                                });
+
+                                converter = new SSIMConverter(calculator, opts =>
                                 {
                                     opts.FontSize = settings.TileSize;
-                                    opts.FontFace = settings.FontFace;
-                                    opts.Subdivide = settings.SubDivide;
                                     opts.ParallelCalculate = settings.Threads;
-                                    opts.Glyphs = glyphs;
-                                    opts.InvertFont = settings.InvertFont;
+                                    opts.GlyphClasses = glyphs;
                                 });
                             }
                             break;
@@ -396,7 +415,7 @@ public class App : AsyncCommand<AppSettings>
         return 0;
     }
 
-    private static async Task<string[]> LoadGlyphsAsync(string path, CancellationToken token = default)
+    private static async Task<Dictionary<string, string[]>> LoadGlyphsAsync(string path, CancellationToken token = default)
     {
         //Read glyphs file
         await using FileStream fs = new(path, FileMode.Open, FileAccess.Read);
@@ -404,25 +423,87 @@ public class App : AsyncCommand<AppSettings>
 
         token.ThrowIfCancellationRequested();
 
-        string[] glyphs = (await sr.ReadToEndAsync(token))
+        var classes = (await sr.ReadToEndAsync(token))
             .Split(Environment.NewLine)
             .Where(line => line.Length > 0)
-            .Distinct()
-            .ToArray();
+            .Select(line =>
+            {
+                var split = line.Split(" ;; ", 2);
 
-        return glyphs;
+                string head = split.Length > 0 ? split[0] : string.Empty;
+                string tail = split.Length > 1 ? split[1] : string.Empty;
+
+                var tail_split = tail.Split(" // ");
+
+                return (head, tail_split);
+            })
+            .Where(h => !string.IsNullOrWhiteSpace(h.head))
+            .DistinctBy(h => h.head)
+            .ToDictionary(h => h.head, h => h.tail_split);
+
+        return classes;
     }
 
-    private static async Task SaveGlyphsAsync(string path, IEnumerable<string> glyphs, CancellationToken token = default)
+    private static async Task<Dictionary<string, string[]>> CreateGlyphsAsync(IEnumerable<string> glyphs, string path, AppSettings settings, CancellationToken token = default)
     {
-        //Write glyphs file
+        //Break glyphs into classes based on which ones are most similar
+        HashSet<string> visited = [];
+        Dictionary<string, List<string>> classes = [];
+
+        string[] glyph_arr = glyphs.ToArray();
+
+        //Create images for glyphs
+        Dictionary<string, PixelImage> glyph_images = Utils.GetGlyphImages(glyph_arr, settings.TileSize, settings.FontFace, settings.InvertFont)
+            .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
+
+        SSIMCalculator calculator = new(glyph_images, configure =>
+        {
+            configure.Subdivide = settings.SubDivide;
+            configure.GaussianStdDev = 1.5d;
+        });
+
+        foreach(var glyph in glyphs)
+        {
+            //If glyph already has been visited, it
+            //already belongs to a class
+            if (visited.Contains(glyph))
+                continue;
+
+            visited.Add(glyph);
+
+            var glyph_image = glyph_images[glyph];
+            classes[glyph] = [glyph];
+
+            //Compare each other glyph to this
+            foreach(var other in glyphs)
+            {
+                //If glyph already has been visited, it
+                //already belongs to a class
+                if (visited.Contains(other))
+                    continue;
+
+                var other_image = glyph_images[other];
+
+                //Do comparison
+                var ssim = calculator.Calculate(glyph_image, other_image);
+
+                //If SSIM is above a certain threshold, record as being in the same class
+                if(ssim > CREATE_GLYPH_CLASSES_CONFIDENCE)
+                {
+                    visited.Add(other);
+                    classes[glyph].Add(other);
+                }
+            }
+        }
+
+        //Write to file
         await using FileStream fs = new(path, FileMode.OpenOrCreate, FileAccess.Write);
         using StreamWriter sw = new(fs);
 
-        token.ThrowIfCancellationRequested();
+        foreach (var pair in classes)
+            await sw.WriteLineAsync($"{pair.Key} ;; {string.Join(" // ", pair.Value)}");
 
-        foreach (var glyph in glyphs)
-            await sw.WriteLineAsync(glyph);
+        return classes.ToDictionary(c => c.Key, c => c.Value.ToArray());
     }
 
     //Read in solutions from file

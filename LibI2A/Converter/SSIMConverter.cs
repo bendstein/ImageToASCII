@@ -1,32 +1,27 @@
 ﻿using ImageMagick;
+using LibI2A.Calculator;
 using LibI2A.Common;
 using Pastel;
 
 namespace LibI2A.Converter;
 public class SSIMConverter : IImageToASCIIConverter
 {
-    private readonly SSIMCalculator calculator;
-
-    private readonly Dictionary<string, PixelImage> glyph_images;
+    private readonly ISSIMCalculator calculator;
 
     private readonly Options options;
 
-    public SSIMConverter(Action<Options>? configure = null)
+    public SSIMConverter(ISSIMCalculator calculator, Action<Options>? configure = null)
     {
+        this.calculator = calculator;
         Options options = new();
         configure?.Invoke(options);
         this.options = options;
-        glyph_images = Utils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
-            .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
-        calculator = new SSIMCalculator(this.options.SSIMCalculatorOptions);
     }
 
-    public SSIMConverter(Options options)
+    public SSIMConverter(ISSIMCalculator calculator, Options options)
     {
+        this.calculator = calculator;
         this.options = options;
-        glyph_images = Utils.GetGlyphImages(options.Glyphs.ToArray(), options.FontSize, options.FontFace, options.InvertFont)
-            .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
-        calculator = new SSIMCalculator(this.options.SSIMCalculatorOptions);
     }
 
     public IEnumerable<(string glyph, uint? color)> ConvertImage(Stream input)
@@ -77,18 +72,18 @@ public class SSIMConverter : IImageToASCIIConverter
             (string key, double score) max = (string.Empty, double.MinValue);
             var lk = new { };
 
-            List<Thread> threads = glyph_images.Select(img => new Thread(() =>
+            List<Thread> threads = options.GlyphClasses.Keys.Select(glyph => new Thread(() =>
             {
                 try
                 {
-                    double score = calculator.Calculate(tile, img.Value);
+                    double score = calculator.CalculateSSIM(tile, glyph);
 
                     //If better than current max, record
                     lock (lk)
                     {
                         if (score > max.score)
                         {
-                            max = (img.Key, score);
+                            max = (glyph, score);
                         }
                     }
                 }
@@ -205,29 +200,29 @@ public class SSIMConverter : IImageToASCIIConverter
             }
 
             //Get all glyphs and values
-            (string primary, Dictionary<string, double> similar) getGlyphs(Dictionary<string, PixelImage> glyphs)
+            (string primary, Dictionary<string, double> similar) getGlyphs(IEnumerable<string> glyphs)
             {
                 SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
                 Dictionary<string, double> scores = [];
                 (string key, double value) max = (string.Empty, double.MinValue);
 
                 //Find the glyph(s) that are most similar to this tile
-                List<Thread> threads = glyphs.Select(img => new Thread(() =>
+                List<Thread> threads = glyphs.Select(glyph => new Thread(() =>
                 {
                     try
                     {
-                        double score = calculator.Calculate(tile, img.Value);
+                        double score = calculator.CalculateSSIM(tile, glyph);
 
                         lock (scores)
                         {
                             //If better than current max, record as max
                             if (score > max.value)
                             {
-                                max = (img.Key, score);
+                                max = (glyph, score);
                             }
 
                             //Record score
-                            scores[img.Key] = score;
+                            scores[glyph] = score;
                         }
                     }
                     finally
@@ -253,8 +248,7 @@ public class SSIMConverter : IImageToASCIIConverter
                 return (max.key, scores);
             }
 
-            (string? glyph, Dictionary<string, double>? glyphs) = getGlyphs(glyph_images);
-            //(var inv_glyph, var inv_glyphs) = getGlyphs(glyph_images_inv);
+            (string? glyph, Dictionary<string, double>? glyphs) = getGlyphs(options.GlyphClasses.Keys);
 
             //Print best match
             Write(glyph, combined);
@@ -270,28 +264,10 @@ public class SSIMConverter : IImageToASCIIConverter
 
     public class Options
     {
-        public int Subdivide { get; set; } = 1;
-
-        public (double K1, double K2) Constants = (0.01d, 0.03d);
-
-        public double GaussianStdDev { get; set; } = 1.5d;
-
         public int FontSize { get; set; } = 12;
-
-        public string FontFace { get; set; } = string.Empty;
-
-        public bool InvertFont { get; set; } = false;
 
         public int ParallelCalculate { get; set; } = 1;
 
-        public IEnumerable<string> Glyphs { get; set; } = [];
-
-        public SSIMCalculator.Options SSIMCalculatorOptions
-            => new()
-            {
-                Subdivide = Subdivide,
-                Constants = Constants,
-                GaussianStdDev = GaussianStdDev
-            };
+        public Dictionary<string, string[]> GlyphClasses { get; set; } = [];
     }
 }

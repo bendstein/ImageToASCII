@@ -147,3 +147,5 @@ ASCIIArt/glyphs-reduced.txt
 preprocessed/preprocessed-reduced.txt
 model/model-reduced.nn
 model/
+preprocessed/
+preprocessed_old/
