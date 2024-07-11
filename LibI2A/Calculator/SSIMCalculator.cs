@@ -58,7 +58,7 @@ public class SSIMCalculator : ISSIMCalculator
             //Get gaussian-weighted standard deviation of the intensities of each image (contrast)
             (double a, double b) stddev = (
                 a: intensities.a.Count <= 0 ? 0 : Math.Sqrt(intensities.a.Select((i, ndx) => W(ndx) * Math.Pow(i - mean.a, 2)).Sum()),
-                b: intensities.b.Count <= 1 ? 0 : Math.Sqrt(intensities.b.Select((i, ndx) => W(ndx) * Math.Pow(i - mean.b, 2)).Sum())
+                b: intensities.b.Count <= 0 ? 0 : Math.Sqrt(intensities.b.Select((i, ndx) => W(ndx) * Math.Pow(i - mean.b, 2)).Sum())
             );
 
             //Get gaussian-weighted covariation of the intensities of each tile
@@ -107,16 +107,16 @@ public class SSIMCalculator : ISSIMCalculator
         List<PixelImage> subtiles_a = image_a.Tiles(subtile_width_a, subtile_height_a).ToList();
         List<PixelImage> subtiles_b = image_b.Tiles(subtile_width_b, subtile_height_b).ToList();
 
+        int subtiles = Math.Max(subtiles_a.Count, subtiles_b.Count);
+
         //Generate an NxN circular gaussian matrix
         double[] gaussian = GenerateGaussian(
-            Math.Max(subtile_width_a, subtile_width_b),
-            Math.Max(subtile_height_a, subtile_height_b),
+            (int)Math.Floor(Math.Sqrt(subtiles)),
+            (int)Math.Floor(Math.Sqrt(subtiles)),
             options.GaussianStdDev
         );
 
         double W(int i) => i < gaussian.Length ? gaussian[i] : 0;
-
-        int subtiles = Math.Max(subtiles_a.Count, subtiles_b.Count);
 
         double ssim_sum = 0d;
 
@@ -131,12 +131,13 @@ public class SSIMCalculator : ISSIMCalculator
                 double[] intensities_a = [.. image_a.GetIntensities()];
                 double[] intensities_b = [.. image_b.GetIntensities()];
 
-                ssim_sum += W(t) * CalculateSubtile(subtile_a, subtile_b);
+                var ssim = CalculateSubtile(subtile_a, subtile_b);
+                ssim_sum += W(t) * ssim;
             }
         }
 
-        //Return average of gaussian weighted SSIMs
-        return subtiles == 0 ? 0 : ssim_sum / subtiles;
+        //Return sum of gaussian weighted SSIMs
+        return ssim_sum;
     }
 
     /// <summary>
@@ -185,6 +186,6 @@ public class SSIMCalculator : ISSIMCalculator
 
         public double GaussianStdDev { get; set; } = 1.5d;
 
-        public (double W1, double W2, double W3) Weights = (1d, 2d, 1d);
+        public (double W1, double W2, double W3) Weights = (1d, 1d, 1d);
     }
 }

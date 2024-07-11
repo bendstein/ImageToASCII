@@ -21,7 +21,7 @@ public class App : AsyncCommand<AppSettings>
         PREPROCESS_PRECISION = 8;
 
     private const double
-        CREATE_GLYPH_CLASSES_CONFIDENCE = 0.035d;
+        CREATE_GLYPH_CLASSES_CONFIDENCE = 0.90d;
 
     public override async Task<int> ExecuteAsync(CommandContext context, AppSettings settings)
     {
