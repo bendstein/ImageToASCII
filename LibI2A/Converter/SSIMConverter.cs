@@ -156,13 +156,13 @@ public class SSIMConverter : IImageToASCIIConverter
             }
         }
 
-        using MagickImageCollection image_collection = new(input);
-        image_collection.Coalesce();
-        IMagickImage<ushort> image = image_collection.First();
-
         //Augment dataset by rotating the image
         for(int degrees = 0; degrees < 360; degrees += 30)
         {
+            using MagickImageCollection image_collection = new(input);
+            image_collection.Coalesce();
+            IMagickImage<ushort> image = image_collection.First();
+
             if (degrees > 0)
                 image.Rotate(degrees);
 
