@@ -156,21 +156,23 @@ public class SSIMConverter : IImageToASCIIConverter
             }
         }
 
+        using MagickImageCollection image_collection = new(input);
+        image_collection.Coalesce();
+        IMagickImage<ushort> image = image_collection.First();
+
         //Augment dataset by rotating the image
-        for(int degrees = 0; degrees < 360; degrees += 30)
+        for (int degrees = 0; degrees < 360; degrees += 30)
         {
-            using MagickImageCollection image_collection = new(input);
-            image_collection.Coalesce();
-            IMagickImage<ushort> image = image_collection.First();
+            var rotated = image.Clone();
 
             if (degrees > 0)
-                image.Rotate(degrees);
+                rotated.Rotate(degrees);
 
             //Break images into windows
-            PixelImage pixel_image = new(image);
+            PixelImage pixel_image = new(rotated);
 
-            int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
-            int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
+            int width = (int)Math.Ceiling((double)rotated.Width / options.FontSize);
+            int height = (int)Math.Ceiling((double)rotated.Height / options.FontSize);
 
             IEnumerator<PixelImage> tiles = pixel_image.Tiles(options.FontSize, options.FontSize).GetEnumerator();
 
