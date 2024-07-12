@@ -2,6 +2,7 @@
 using LibI2A.Calculator;
 using LibI2A.Common;
 using Pastel;
+using System.Runtime.Serialization.Formatters;
 
 namespace LibI2A.Converter;
 public class SSIMConverter : IImageToASCIIConverter
@@ -159,106 +160,114 @@ public class SSIMConverter : IImageToASCIIConverter
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
 
-        //Break images into windows
-        PixelImage pixel_image = new(image);
-
-        int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
-        int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
-
-        IEnumerator<PixelImage> tiles = pixel_image.Tiles(options.FontSize, options.FontSize).GetEnumerator();
-
-        for (int n = 0; tiles.MoveNext(); n++)
+        //Augment dataset by rotating the image
+        for(int degrees = 0; degrees < 360; degrees += 30)
         {
-            PixelImage tile = tiles.Current;
+            if (degrees > 0)
+                image.Rotate(degrees);
 
-            //Line break in console
-            if (n > 0 && (n % width) == 0)
+            //Break images into windows
+            PixelImage pixel_image = new(image);
+
+            int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
+            int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
+
+            IEnumerator<PixelImage> tiles = pixel_image.Tiles(options.FontSize, options.FontSize).GetEnumerator();
+
+            for (int n = 0; tiles.MoveNext(); n++)
             {
-                WriteLine();
-            }
+                PixelImage tile = tiles.Current;
 
-            //Get average color of tile
-            List<(uint a, double h, double s, double v)> colors = tile.Pixels
-                .Where(color => color != null)
-                .Select(color => Utils.ARGBToAHSV((
-                    Utils.ScaleUShort(color!.A),
-                    Utils.ScaleUShort(color.R),
-                    Utils.ScaleUShort(color.G),
-                    Utils.ScaleUShort(color.B))))
-                .ToList();
-
-            uint combined = 0;
-
-            if (colors.Count > 0)
-            {
-                (uint a, double h, double s, double v) sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
-                (uint, double, double, double) avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
-                    sums.h / colors.Count,
-                    sums.s / colors.Count,
-                    sums.v / colors.Count);
-                combined = Utils.ToUInt(Utils.AHSVToARGB(avgs));
-            }
-
-            //Get all glyphs and values
-            (string primary, Dictionary<string, double> similar) getGlyphs(IEnumerable<string> glyphs)
-            {
-                SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
-                Dictionary<string, double> scores = [];
-                (string key, double value) max = (string.Empty, double.MinValue);
-
-                //Find the glyph(s) that are most similar to this tile
-                List<Thread> threads = glyphs.Select(glyph => new Thread(() =>
+                //Line break in console
+                if (n > 0 && (n % width) == 0)
                 {
-                    try
-                    {
-                        double score = calculator.CalculateSSIM(tile, glyph);
+                    WriteLine();
+                }
 
-                        lock (scores)
+                //Get average color of tile
+                List<(uint a, double h, double s, double v)> colors = tile.Pixels
+                    .Where(color => color != null)
+                    .Select(color => Utils.ARGBToAHSV((
+                        Utils.ScaleUShort(color!.A),
+                        Utils.ScaleUShort(color.R),
+                        Utils.ScaleUShort(color.G),
+                        Utils.ScaleUShort(color.B))))
+                    .ToList();
+
+                uint combined = 0;
+
+                if (colors.Count > 0)
+                {
+                    (uint a, double h, double s, double v) sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
+                    (uint, double, double, double) avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
+                        sums.h / colors.Count,
+                        sums.s / colors.Count,
+                        sums.v / colors.Count);
+                    combined = Utils.ToUInt(Utils.AHSVToARGB(avgs));
+                }
+
+                //Get all glyphs and values
+                (string primary, Dictionary<string, double> similar) getGlyphs(IEnumerable<string> glyphs)
+                {
+                    SemaphoreSlim mutex = new(Math.Max(1, options.ParallelCalculate), Math.Max(1, options.ParallelCalculate));
+                    Dictionary<string, double> scores = [];
+                    (string key, double value) max = (string.Empty, double.MinValue);
+
+                    //Find the glyph(s) that are most similar to this tile
+                    List<Thread> threads = glyphs.Select(glyph => new Thread(() =>
+                    {
+                        try
                         {
-                            //If better than current max, record as max
-                            if (score > max.value)
+                            double score = calculator.CalculateSSIM(tile, glyph);
+
+                            lock (scores)
                             {
-                                max = (glyph, score);
+                                //If better than current max, record as max
+                                if (score > max.value)
+                                {
+                                    max = (glyph, score);
+                                }
+
+                                //Record score
+                                scores[glyph] = score;
                             }
-
-                            //Record score
-                            scores[glyph] = score;
                         }
-                    }
-                    finally
+                        finally
+                        {
+                            _ = mutex.Release();
+                        }
+                    })).ToList();
+
+                    //Calculate in parallel
+                    foreach (Thread thread in threads)
                     {
-                        _ = mutex.Release();
+                        mutex.Wait();
+                        thread.Start();
                     }
-                })).ToList();
 
-                //Calculate in parallel
-                foreach (Thread thread in threads)
-                {
-                    mutex.Wait();
-                    thread.Start();
+                    //Wait for all threads to complete
+                    foreach (Thread thread in threads)
+                    {
+                        thread.Join();
+                    }
+
+                    //Return maximum
+                    return (max.key, scores);
                 }
 
-                //Wait for all threads to complete
-                foreach (Thread thread in threads)
-                {
-                    thread.Join();
-                }
+                (string? glyph, Dictionary<string, double>? glyphs) = getGlyphs(options.GlyphClasses.Keys);
 
-                //Return maximum
-                return (max.key, scores);
+                //Print best match
+                Write(glyph, combined);
+
+                double[] intensities = [.. tile.GetIntensities()];
+
+                yield return (intensities, glyphs.Select(g => (g.Key, g.Value)).ToArray());
             }
 
-            (string? glyph, Dictionary<string, double>? glyphs) = getGlyphs(options.GlyphClasses.Keys);
-
-            //Print best match
-            Write(glyph, combined);
-
-            double[] intensities = [.. tile.GetIntensities()];
-
-            yield return (intensities, glyphs.Select(g => (g.Key, g.Value)).ToArray());
+            WriteLine();
         }
 
-        WriteLine();
         yield break;
     }
 
