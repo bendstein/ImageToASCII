@@ -2,7 +2,7 @@
   "profiles": {
     "I2A": {
       "commandName": "Project",
-      "commandLineArgs": "C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\RandomImageGenerator\\bin\\Release\\net8.0\\out\r\n--mode train\r\n--threads 1\r\n--model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\model\\model-reduced.nn \r\n--learning-rate 3\r\n--adam 0.9,0.999\r\n--alpha 0.01 \r\n--hidden-layers 1\r\n--hidden-neurons 2\r\n--batch-size 1\r\n--tile-size 8\r\n--subdivide 2\r\n--create-glyphs\r\n--lambda 0.01"
+      "commandLineArgs": "C:\\Games\\Livid\\AI\\351.png --mode train --threads 32 --model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\model\\model.nn --learning-rate 0.01 --adam 0.99,0.999 --alpha 0.001 --lambda 0.01 --hidden-layers 4 --hidden-neurons 128 --batch-size 16 --tile-size 8"
     }
   }
 }

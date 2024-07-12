@@ -424,7 +424,7 @@ public class App : AsyncCommand<AppSettings>
         token.ThrowIfCancellationRequested();
 
         var classes = (await sr.ReadToEndAsync(token))
-            .Split(Environment.NewLine)
+            .Split('\n')
             .Where(line => line.Length > 0)
             .Select(line =>
             {

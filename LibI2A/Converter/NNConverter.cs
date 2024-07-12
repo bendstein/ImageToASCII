@@ -242,9 +242,17 @@ public class NNConverter : IImageToASCIIConverter
 
                 Input[] batch = batches.Current;
 
+                //Calculate class weights as being inversely proportional to frequency and confidence
+                var batch_ssim_freq = batch.Select(b => DenseVector.OfArray(b.NormalizedSSIMs))
+                    .Aggregate((a, b) => a + b);
+
+                var batch_ssim_sum = batch_ssim_freq.Sum();
+
+                var class_weights = (DenseVector)batch_ssim_freq.Map(s => 1 - (s / batch_ssim_sum));
+
                 SemaphoreSlim tasks = new(training_set.Threads, training_set.Threads);
 
-                List<Task<(DenseVector[] activations, double loss)>> forward_propagation_results = [];
+                List<Task<(DenseVector[] activations, DenseVector pointwise_loss, double loss)>> forward_propagation_results = [];
 
                 //Run batch through the neural net
                 foreach (Input? input in batch)
@@ -268,12 +276,18 @@ public class NNConverter : IImageToASCIIConverter
 
                             DenseVector ssims = DenseVector.OfArray(input.NormalizedSSIMs);
 
-                            //Calculate error using cross entropy loss
-                            double loss = ssims * output.Map(value => Math.Log(Math.Max(EPS, value)));
+                            //Calculate weighted error using cross entropy loss
+                            double loss = ssims * output.Map(value => Math.Log(Math.Max(EPS, value)))
+                                .PointwiseMultiply(class_weights);
+
+                            //Calculate weighted pointwise loss using binary cross entropy loss
+                            var pointwise_loss = -1 * (ssims.PointwiseMultiply(output.Map(value => Math.Log(Math.Max(EPS, value))))
+                                + ssims.Map(s => 1 - s).PointwiseMultiply(output.Map(value => Math.Log(Math.Max(EPS, 1 - value)))))
+                                .PointwiseMultiply(class_weights);
 
                             token.ThrowIfCancellationRequested();
 
-                            return (activations, -loss);
+                            return (activations, (DenseVector)pointwise_loss, -loss);
                         }
                         finally
                         {
@@ -286,7 +300,7 @@ public class NNConverter : IImageToASCIIConverter
                 token.ThrowIfCancellationRequested();
 
                 //Wait for all forward propagation tasks to complete
-                (DenseVector[] activations, double loss)[] batch_activations = await Task.WhenAll(forward_propagation_results);
+                (DenseVector[] activations, DenseVector pointwise_loss, double loss)[] batch_activations = await Task.WhenAll(forward_propagation_results);
 
                 token.ThrowIfCancellationRequested();
 
@@ -294,6 +308,10 @@ public class NNConverter : IImageToASCIIConverter
                 double avg_loss = batch_activations.Select(a => a.loss).Average();
 
                 Log($"Batch loss: {avg_loss}");
+
+                //Get average loss for each batch
+                var avg_class_loss = batch_activations.Select(a => a.pointwise_loss)
+                    .Aggregate((a, b) => a + b) / batch_activations.Length;
 
                 List<Task<(DenseMatrix[]? weights, DenseVector[]? biases)>> backward_propagation_results = [];
 
@@ -315,7 +333,7 @@ public class NNConverter : IImageToASCIIConverter
                         {
                             token.ThrowIfCancellationRequested();
 
-                            return PropagateBackwards(model, input, activations);
+                            return PropagateBackwards(model, input, activations, class_weights);
                         }
                         finally
                         {
@@ -431,7 +449,7 @@ public class NNConverter : IImageToASCIIConverter
     /// <param name="input">The input.</param>
     /// <param name="activations">The activations from each layer of the neural net.</param>
     /// <returns>The gradients for the weights and biases.</returns>
-    private static (DenseMatrix[]? weight_gradients, DenseVector[]? bias_gradients) PropagateBackwards(Model model, Input input, DenseVector[] activations)
+    private static (DenseMatrix[]? weight_gradients, DenseVector[]? bias_gradients) PropagateBackwards(Model model, Input input, DenseVector[] activations, DenseVector class_weights)
     {
         DenseVector ssims = DenseVector.OfArray(input.NormalizedSSIMs);
 
@@ -453,7 +471,8 @@ public class NNConverter : IImageToASCIIConverter
             if(l == all_gradients.Length - 1)
             {
                 //Gradient of cross-entropy loss wrt softmax activation simplifies to predicted - expected
-                error_term = neurons - ssims;
+                //Multiply by class weights
+                error_term = (DenseVector)(neurons - ssims).PointwiseMultiply(class_weights);
             }
             else
             {
@@ -928,8 +947,8 @@ public class NNConverter : IImageToASCIIConverter
     public class Input
     {
         private const double
-            COERCE_TO_ZERO = 0.0001,
-            MAX_DISTANCE = 0.03d;
+            COERCE_TO_ZERO = 0.00001,
+            STD_DEV = 0.15d;
 
         /// <summary>
         /// The intensities of each pixel in this image tile.
@@ -971,9 +990,12 @@ public class NNConverter : IImageToASCIIConverter
                 if (max == 0)
                     return SSIMs;
 
-                //If SSIM is further than {MAX_DISTANCE} percent away from the max, make 0
-                var penalized = SSIMs.Select(s => (max - s) / max < MAX_DISTANCE? s : 0)
-                    .Select(s => s <= COERCE_TO_ZERO ? 0 : s);
+                //Get gaussian weights based on percentage of max
+                var weights = DenseVector.OfEnumerable(SSIMs.Select(s => Math.Exp(-Math.Pow(s / max - 1, 2) / (2 * STD_DEV * STD_DEV)) / (Math.Sqrt(2 * Math.PI) * STD_DEV)));
+
+                //Penalize based on percentage of max
+                var penalized = weights.PointwiseMultiply(DenseVector.OfArray(SSIMs))
+                    .Map(s => s <= COERCE_TO_ZERO ? 0 : s);
 
                 //Divide by sum to add up to 1
                 var sum = penalized.Sum();
