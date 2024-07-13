@@ -1,9 +1,7 @@
-﻿using ImageMagick;
-using LibI2A;
+﻿using LibI2A;
 using LibI2A.Calculator;
 using LibI2A.Common;
 using LibI2A.Converter;
-using Newtonsoft.Json.Linq;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -28,35 +26,37 @@ public class App : AsyncCommand<AppSettings>
         CancellationTokenSource cts = new();
         CancellationToken token = cts.Token;
 
-        if (!Directory.Exists("log"))
+        if(!Directory.Exists("log"))
         {
             _ = Directory.CreateDirectory("log");
         }
 
-        bool log_console = true;
+        var log_console = true;
 
         using FileStream log_stream = new($"log/{DateTime.Now:MM-dd-yyyy-HH-mm-ss-ffff}.log", FileMode.OpenOrCreate, FileAccess.Write);
         using StreamWriter log_writer = new(log_stream);
 
         void Log(string message, bool is_error = false)
         {
-            string full_message = $"{DateTime.Now:HH:mm:ss.ffff} {(is_error ? "ERROR | " : "INFO  | ")} {message}";
+            var full_message = $"{DateTime.Now:HH:mm:ss.ffff} {(is_error ? "ERROR | " : "INFO  | ")} {message}";
 
-            if (log_console)
+            if(log_console)
+            {
                 Console.WriteLine(full_message);
+            }
 
             //log_writer.WriteLine(full_message);
         }
 
         void WriteGlyph(string glyph, uint? color = null)
         {
-            string s = glyph;
+            var s = glyph;
 
-            if (color != null && !settings.NoColor)
+            if(color != null && !settings.NoColor)
             {
-                int r = (int)(color >> 16) & 0xFF;
-                int g = (int)(color >> 8) & 0xFF;
-                int b = (int)color & 0xFF;
+                var r = (int)(color >> 16) & 0xFF;
+                var g = (int)(color >> 8) & 0xFF;
+                var b = (int)color & 0xFF;
                 s = Pastel.ConsoleExtensions.Pastel(s, System.Drawing.Color.FromArgb(r, g, b));
             }
 
@@ -66,7 +66,7 @@ public class App : AsyncCommand<AppSettings>
         void OnClose(object? sender, ConsoleCancelEventArgs e)
         {
             //Use default behavior if pressed more than once
-            if (token.IsCancellationRequested)
+            if(token.IsCancellationRequested)
             {
                 e.Cancel = false;
                 return;
@@ -95,18 +95,20 @@ public class App : AsyncCommand<AppSettings>
                     List<char> chars = [];
                     for(byte i = 0; i < byte.MaxValue; i++)
                     {
-                        char c = (char)i;
+                        var c = (char)i;
 
-                        if (!char.IsWhiteSpace(c) && !char.IsControl(c) && char.IsAscii(c))
+                        if(!char.IsWhiteSpace(c) && !char.IsControl(c) && char.IsAscii(c))
+                        {
                             chars.Add(c);
+                        }
                     }
 
-                    await CreateGlyphsAsync(chars.Select(c => c.ToString()), settings.Glyphs, settings, token);
+                    _ = await CreateGlyphsAsync(chars.Select(c => c.ToString()), settings.Glyphs, settings, token);
 
                     Log($"Successfully created {settings.Glyphs}.");
                 }
 
-                switch (settings.Mode)
+                switch(settings.Mode)
                 {
                     //Preprocess images
                     case Mode.preprocess:
@@ -117,11 +119,11 @@ public class App : AsyncCommand<AppSettings>
                         WriteGlyph(string.Empty);
 
                         //Read glyphs file
-                        var glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
+                        Dictionary<string, string[]> glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
 
                         token.ThrowIfCancellationRequested();
 
-                        if (glyphs.Count == 0)
+                        if(glyphs.Count == 0)
                         {
                             throw new Exception("No glyphs were present.");
                         }
@@ -142,10 +144,10 @@ public class App : AsyncCommand<AppSettings>
                             opts.GlyphClasses = glyphs;
                         });
 
-                        string? preprocess_dir = Path.GetDirectoryName(settings.PreprocessPath);
+                        var preprocess_dir = Path.GetDirectoryName(settings.PreprocessPath);
 
                         //Create directory if not exists
-                        if (!string.IsNullOrWhiteSpace(preprocess_dir) && !Directory.Exists(preprocess_dir))
+                        if(!string.IsNullOrWhiteSpace(preprocess_dir) && !Directory.Exists(preprocess_dir))
                         {
                             _ = Directory.CreateDirectory(preprocess_dir);
                         }
@@ -155,10 +157,12 @@ public class App : AsyncCommand<AppSettings>
                         using StreamWriter preprocess_file_writer = new(preprocess_file_stream);
 
                         //Process each file, and write their SSIM data to a file
-                        foreach(var solution in ProcessImages(converter, settings.Path, WriteGlyph))
+                        foreach((double[] intensities, (string glyph, double ssim)[] scores) solution in ProcessImages(converter, settings.Path, WriteGlyph))
                         {
-                            if (token.IsCancellationRequested)
+                            if(token.IsCancellationRequested)
+                            {
                                 break;
+                            }
 
                             preprocess_file_writer.WriteLine($"{string.Join(',', solution.intensities.Select(i => Utils.Round(i, PREPROCESS_PRECISION)))} ; {string.Join(" ; ", solution.scores.Select(s => $"{s.glyph} , {s.ssim}"))}");
                         }
@@ -178,7 +182,7 @@ public class App : AsyncCommand<AppSettings>
                         //Load model
                         NNConverter.Model? model = null;
 
-                        if (!string.IsNullOrWhiteSpace(settings.Model) && File.Exists(settings.Model))
+                        if(!string.IsNullOrWhiteSpace(settings.Model) && File.Exists(settings.Model))
                         {
                             token.ThrowIfCancellationRequested();
 
@@ -187,15 +191,17 @@ public class App : AsyncCommand<AppSettings>
                             await using FileStream fs = new(settings.Model, FileMode.Open, FileAccess.Read);
                             await using MemoryStream ms = new();
                             await fs.CopyToAsync(ms, token);
-                            byte[] bytes = ms.GetBuffer();
+                            var bytes = ms.GetBuffer();
                             model = NNConverter.Model.FromBytes(bytes);
                         }
 
                         //Read glyphs file
-                        var glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
+                        Dictionary<string, string[]> glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
 
-                        if (glyphs.Count == 0)
+                        if(glyphs.Count == 0)
+                        {
                             throw new Exception("No glyphs were present.");
+                        }
 
                         //Init model if not already present
                         model ??= new NNConverter.Model(new NNConverter.ModelInitParams()
@@ -236,10 +242,12 @@ public class App : AsyncCommand<AppSettings>
                             //Process each file, and yield the training data
                             IEnumerable<NNConverter.Input> GetImageData()
                             {
-                                foreach (var solution in ProcessImages(converter, settings.Path, (_, _) => { }))
+                                foreach((double[] intensities, (string glyph, double ssim)[] scores) solution in ProcessImages(converter, settings.Path, (_, _) => { }))
                                 {
-                                    if (token.IsCancellationRequested)
+                                    if(token.IsCancellationRequested)
+                                    {
                                         break;
+                                    }
 
                                     yield return new NNConverter.Input()
                                     {
@@ -259,8 +267,31 @@ public class App : AsyncCommand<AppSettings>
                             training_input = LoadPreprocessed(settings.PreprocessPath, [.. glyphs.Keys], settings.Shuffle);
                         }
 
-                        training_input = training_input.Where(item => item.Intensities.Length == settings.TileSize * settings.TileSize
-                                && item.SSIMs.Length == model.Glyphs.Length);
+                        training_input = training_input.Where((item, ndx) =>
+                        {
+                            if(item.Intensities.Length == settings.TileSize * settings.TileSize)
+                            {
+                                if(item.SSIMs.Length == model.Glyphs.Length)
+                                {
+                                    return true;
+                                }
+                                else
+                                {
+                                    Log($"Skipping item {ndx}, as SSIMs length ({item.SSIMs.Length}) is incorrect (should be {model.Glyphs.Length}).", true);
+                                }
+                            }
+                            else
+                            {
+                                Log($"Skipping item {ndx}, as intensities length ({item.Intensities.Length}) is incorrect (should be {settings.TileSize * settings.TileSize}).", true);
+                            }
+
+                            return false;
+                        });
+
+                        if(!training_input.Any())
+                        {
+                            throw new Exception("Training set is empty!");
+                        }
 
                         NNConverter.TrainingSet training_set = new()
                         {
@@ -277,11 +308,11 @@ public class App : AsyncCommand<AppSettings>
                         {
                             token.ThrowIfCancellationRequested();
 
-                            if (!string.IsNullOrWhiteSpace(settings.Model))
+                            if(!string.IsNullOrWhiteSpace(settings.Model))
                             {
-                                string? model_dir = Path.GetDirectoryName(settings.Model);
+                                var model_dir = Path.GetDirectoryName(settings.Model);
 
-                                if (!string.IsNullOrWhiteSpace(model_dir) && !Directory.Exists(model_dir))
+                                if(!string.IsNullOrWhiteSpace(model_dir) && !Directory.Exists(model_dir))
                                 {
                                     _ = Directory.CreateDirectory(model_dir);
                                 }
@@ -290,7 +321,7 @@ public class App : AsyncCommand<AppSettings>
 
                                 //Don't cancel until after write is complete
                                 await using FileStream fs = new(settings.Model, FileMode.Create, FileAccess.ReadWrite);
-                                byte[] model_bytes = model.ToBytes();
+                                var model_bytes = model.ToBytes();
                                 await fs.WriteAsync(model_bytes, CancellationToken.None);
 
                                 token.ThrowIfCancellationRequested();
@@ -308,8 +339,10 @@ public class App : AsyncCommand<AppSettings>
                             {
                                 model = null;
 
-                                if (err.Exception != null && err.Exception is OperationCanceledException)
+                                if(err.Exception is not null and OperationCanceledException)
+                                {
                                     return;
+                                }
 
                                 throw new Exception($"Failed to train model. {err.Message}", err.Exception);
                             }
@@ -333,14 +366,16 @@ public class App : AsyncCommand<AppSettings>
                         WriteGlyph(string.Empty);
 
                         //Read glyphs file
-                        var glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
+                        Dictionary<string, string[]> glyphs = await LoadGlyphsAsync(settings.Glyphs, token);
 
-                        if (glyphs.Count == 0)
+                        if(glyphs.Count == 0)
+                        {
                             throw new Exception("No glyphs were present.");
+                        }
 
                         IImageToASCIIConverter converter;
 
-                        switch (settings.Method)
+                        switch(settings.Method)
                         {
                             case Method.model:
                             {
@@ -349,18 +384,18 @@ public class App : AsyncCommand<AppSettings>
 
                                 token.ThrowIfCancellationRequested();
 
-                                if (!string.IsNullOrWhiteSpace(settings.Model) && File.Exists(settings.Model))
+                                if(!string.IsNullOrWhiteSpace(settings.Model) && File.Exists(settings.Model))
                                 {
                                     Log($"Reading model from {settings.Model}.");
 
                                     await using FileStream fs = new(settings.Model, FileMode.Open, FileAccess.Read);
                                     await using MemoryStream ms = new();
                                     await fs.CopyToAsync(ms, token);
-                                    byte[] bytes = ms.GetBuffer();
+                                    var bytes = ms.GetBuffer();
                                     model = NNConverter.Model.FromBytes(bytes);
                                 }
 
-                                if (model == null)
+                                if(model == null)
                                 {
                                     throw new Exception($"Failed to find model at {settings.Model}");
                                 }
@@ -375,7 +410,7 @@ public class App : AsyncCommand<AppSettings>
                             case Method.ssim:
                             default:
                             {
-                                var glyph_images = Utils.GetGlyphImages([..glyphs.Keys], settings.TileSize, settings.FontFace, settings.InvertFont)
+                                var glyph_images = Utils.GetGlyphImages([.. glyphs.Keys], settings.TileSize, settings.FontFace, settings.InvertFont)
                                     .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
 
                                 var calculator = new SSIMCalculator(glyph_images, configure =>
@@ -395,13 +430,19 @@ public class App : AsyncCommand<AppSettings>
                         }
 
                         //Process and render each image
-                        foreach((string glyph, uint? color) in ConvertImages(converter, settings.Path))
+                        foreach((var glyph, var color) in ConvertImages(converter, settings.Path))
+                        {
                             WriteGlyph(glyph, color);
+                        }
                     }
                     break;
                 }
             }
-            catch (Exception e) when (e is not OperationCanceledException)
+            catch(OperationCanceledException)
+            {
+                return -1;
+            }
+            catch(Exception e) when(e is not OperationCanceledException)
             {
                 Log(e.ToString(), true);
                 throw;
@@ -430,8 +471,8 @@ public class App : AsyncCommand<AppSettings>
             {
                 var split = line.Split(" ;; ", 2);
 
-                string head = split.Length > 0 ? split[0] : string.Empty;
-                string tail = split.Length > 1 ? split[1] : string.Empty;
+                var head = split.Length > 0 ? split[0] : string.Empty;
+                var tail = split.Length > 1 ? split[1] : string.Empty;
 
                 var tail_split = tail.Split(" // ");
 
@@ -450,10 +491,10 @@ public class App : AsyncCommand<AppSettings>
         HashSet<string> visited = [];
         Dictionary<string, List<string>> classes = [];
 
-        string[] glyph_arr = glyphs.ToArray();
+        var glyph_arr = glyphs.ToArray();
 
         //Create images for glyphs
-        Dictionary<string, PixelImage> glyph_images = Utils.GetGlyphImages(glyph_arr, settings.TileSize, settings.FontFace, settings.InvertFont)
+        var glyph_images = Utils.GetGlyphImages(glyph_arr, settings.TileSize, settings.FontFace, settings.InvertFont)
             .ToDictionary(pair => pair.Key, pair => new PixelImage(pair.Value));
 
         SSIMCalculator calculator = new(glyph_images, configure =>
@@ -466,12 +507,14 @@ public class App : AsyncCommand<AppSettings>
         {
             //If glyph already has been visited, it
             //already belongs to a class
-            if (visited.Contains(glyph))
+            if(visited.Contains(glyph))
+            {
                 continue;
+            }
 
-            visited.Add(glyph);
+            _ = visited.Add(glyph);
 
-            var glyph_image = glyph_images[glyph];
+            PixelImage glyph_image = glyph_images[glyph];
             classes[glyph] = [glyph];
 
             //Compare each other glyph to this
@@ -479,10 +522,12 @@ public class App : AsyncCommand<AppSettings>
             {
                 //If glyph already has been visited, it
                 //already belongs to a class
-                if (visited.Contains(other))
+                if(visited.Contains(other))
+                {
                     continue;
+                }
 
-                var other_image = glyph_images[other];
+                PixelImage other_image = glyph_images[other];
 
                 //Do comparison
                 var ssim = calculator.Calculate(glyph_image, other_image);
@@ -490,7 +535,7 @@ public class App : AsyncCommand<AppSettings>
                 //If SSIM is above a certain threshold, record as being in the same class
                 if(ssim > CREATE_GLYPH_CLASSES_CONFIDENCE)
                 {
-                    visited.Add(other);
+                    _ = visited.Add(other);
                     classes[glyph].Add(other);
                 }
             }
@@ -500,8 +545,10 @@ public class App : AsyncCommand<AppSettings>
         await using FileStream fs = new(path, FileMode.OpenOrCreate, FileAccess.Write);
         using StreamWriter sw = new(fs);
 
-        foreach (var pair in classes)
+        foreach(KeyValuePair<string, List<string>> pair in classes)
+        {
             await sw.WriteLineAsync($"{pair.Key} ;; {string.Join(" // ", pair.Value)}");
+        }
 
         return classes.ToDictionary(c => c.Key, c => c.Value.ToArray());
     }
@@ -517,16 +564,16 @@ public class App : AsyncCommand<AppSettings>
                 : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*.txt", SearchOption.AllDirectories)
                 : [];
 
-            if (shuffle)
+            if(shuffle)
             {
                 temp_path = Directory.CreateTempSubdirectory();
-                string shuffled = Path.Combine(temp_path.FullName, "preprocessed.txt");
+                var shuffled = Path.Combine(temp_path.FullName, "preprocessed.txt");
 
                 //Write the lines of all provided files to one file, shuffled
                 using FileStream fs = new(shuffled, FileMode.OpenOrCreate, FileAccess.ReadWrite);
                 using StreamWriter sw = new(fs);
 
-                foreach (string? line in preprocessed_files
+                foreach(var line in preprocessed_files
                     .SelectMany(File.ReadAllLines)
                     .OrderBy(_ => Random.Shared.Next())
                     .ToArray())
@@ -540,36 +587,36 @@ public class App : AsyncCommand<AppSettings>
                 preprocessed_files = [shuffled];
             }
 
-            foreach (string file in preprocessed_files)
+            foreach(var file in preprocessed_files)
             {
                 using FileStream fs = new(file, FileMode.Open, FileAccess.Read);
                 using StreamReader fsr = new(fs);
 
                 string? line;
-                while ((line = fsr.ReadLine()) != null)
+                while((line = fsr.ReadLine()) != null)
                 {
-                    string[] split = line.Split(" ; ");
+                    var split = line.Split(" ; ");
 
-                    if (split.Length > 0)
+                    if(split.Length > 0)
                     {
-                        double[] intensities = split[0].Split(',')
-                            .Select(s => double.TryParse(s, out double sf) ? sf : 0)
+                        var intensities = split[0].Split(',')
+                            .Select(s => double.TryParse(s, out var sf) ? sf : 0)
                             .ToArray();
 
-                        double[] ssims = new double[glyphs.Length];
+                        var ssims = new double[glyphs.Length];
 
-                        for (int i = 1; i < split.Length; i++)
+                        for(var i = 1; i < split.Length; i++)
                         {
-                            string[] pair = split[i].Split(" , ", 2);
+                            var pair = split[i].Split(" , ", 2);
 
-                            if (pair.Length == 2)
+                            if(pair.Length == 2)
                             {
-                                string glyph = pair[0];
-                                double ssim = double.TryParse(pair[1], out double f) ? f : 0;
+                                var glyph = pair[0];
+                                var ssim = double.TryParse(pair[1], out var f) ? f : 0;
 
-                                for (int g = 0; g < glyphs.Length; g++)
+                                for(var g = 0; g < glyphs.Length; g++)
                                 {
-                                    if (glyphs[g].Equals(glyph))
+                                    if(glyphs[g].Equals(glyph))
                                     {
                                         ssims[g] = ssim;
                                         break;
@@ -577,7 +624,7 @@ public class App : AsyncCommand<AppSettings>
                                 }
                             }
                         }
-               
+
                         yield return new()
                         {
                             Intensities = intensities,
@@ -599,18 +646,15 @@ public class App : AsyncCommand<AppSettings>
     private static IEnumerable<(string glyph, uint? color)> ConvertImages(IImageToASCIIConverter converter, IEnumerable<string> paths)
     {
         //Process each file
-        foreach (string? file in paths.SelectMany(path =>
-        {
-            return File.Exists(path)
+        foreach(var file in paths.SelectMany(path => File.Exists(path)
                 ? (new string[] { path })
-                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([]);
-        }).Distinct())
+                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([])).Distinct())
         {
             using FileStream fs = new(file, FileMode.Open, FileAccess.ReadWrite);
 
-            foreach (var pair in converter.ConvertImage(fs))
+            foreach((string glyph, uint? color) pair in converter.ConvertImage(fs))
             {
-                yield return pair; 
+                yield return pair;
             }
         }
 
@@ -621,18 +665,17 @@ public class App : AsyncCommand<AppSettings>
         Action<string, uint?>? writer = null)
     {
         //Process each file
-        foreach (string? file in paths.SelectMany(path =>
-        {
-            return File.Exists(path)
+        foreach(var file in paths.SelectMany(path => File.Exists(path)
                 ? (new string[] { path })
-                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([]);
-        }).Distinct())
+                : Directory.Exists(path) ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories) : ([])).Distinct())
         {
             using FileStream fs = new(file, FileMode.Open, FileAccess.Read);
 
             //Write each solution to preprocess file
-            foreach (var solution in converter.ProcessImage(fs, writer))
+            foreach((double[] intensities, (string glyph, double ssim)[] scores) solution in converter.ProcessImage(fs, writer))
+            {
                 yield return solution;
+            }
         }
 
         yield break;

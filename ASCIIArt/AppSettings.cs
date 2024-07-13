@@ -62,11 +62,8 @@ public class AppSettings : CommandSettings
     {
         get
         {
-            int?[] split = ClampString.Split(',', StringSplitOptions.TrimEntries)
-                .Select(s =>
-                {
-                    return int.TryParse(s, out int i) && i >= 0 ? (int?)i : null;
-                }).ToArray();
+            var split = ClampString.Split(',', StringSplitOptions.TrimEntries)
+                .Select(s => int.TryParse(s, out var i) && i >= 0 ? (int?)i : null).ToArray();
 
             return (split.Length > 0 ? split[0] : null, split.Length > 1 ? split[1] : null);
         }
@@ -158,8 +155,8 @@ public class AppSettings : CommandSettings
         set
         {
             var split = value.Split(',', 2, StringSplitOptions.TrimEntries);
-            var beta_1 = split.Length < 1? 0 : double.TryParse(split[0], out var bt_1)? bt_1 : 0;
-            var beta_2 = split.Length < 2? 0 : double.TryParse(split[1], out var bt_2)? bt_2 : 0;
+            var beta_1 = split.Length < 1 ? 0 : double.TryParse(split[0], out var bt_1) ? bt_1 : 0;
+            var beta_2 = split.Length < 2 ? 0 : double.TryParse(split[1], out var bt_2) ? bt_2 : 0;
 
             AdamParams = (beta_1, beta_2);
         }

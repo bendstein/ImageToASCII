@@ -3,7 +3,6 @@ using LibI2A.Common;
 using MathNet.Numerics.LinearAlgebra.Double;
 using MathNet.Numerics.Statistics;
 using OneOf;
-using System.Linq;
 using System.Text;
 
 namespace LibI2A.Converter;
@@ -91,24 +90,24 @@ public class NNConverter : IImageToASCIIConverter
         //Break images into windows
         PixelImage pixel_image = new(image);
 
-        int width = (int)Math.Ceiling((double)image.Width / options.FontSize);
-        int height = (int)Math.Ceiling((double)image.Height / options.FontSize);
+        var width = (int)Math.Ceiling((double)image.Width / options.FontSize);
+        var height = (int)Math.Ceiling((double)image.Height / options.FontSize);
 
         //Keep track of choices
         Dictionary<string, string> color_choices = [];
         var skips = new int[model.Glyphs.Length];
 
-        int n = 0;
+        var n = 0;
 
-        foreach (PixelImage tile in pixel_image.Tiles(options.FontSize, options.FontSize))
+        foreach(PixelImage tile in pixel_image.Tiles(options.FontSize, options.FontSize))
         {
-            if (n > 0 && (n % width) == 0)
+            if(n > 0 && (n % width) == 0)
             {
                 yield return (Environment.NewLine, null);
             }
 
             //Get average color of tile
-            List<(uint a, double h, double s, double v)> colors = tile.Pixels
+            var colors = tile.Pixels
                 .Where(color => color != null)
                 .Select(color => Utils.ARGBToAHSV((
                     Utils.ScaleUShort(color!.A),
@@ -120,14 +119,14 @@ public class NNConverter : IImageToASCIIConverter
             uint combined = 0;
             uint hue_bucket = 0;
 
-            if (colors.Count > 0)
+            if(colors.Count > 0)
             {
                 (uint a, double h, double s, double v) sums = colors.AggregateOrDefault<(uint a, double h, double s, double v)>((a, b) => (a.a + b.a, a.h + b.h, a.s + b.s, a.v + b.v), (0, 0, 0, 0));
                 (uint, double, double, double) avgs = ((uint)long.Clamp(sums.a / colors.Count, uint.MinValue, uint.MaxValue),
                     sums.h / colors.Count,
                     sums.s / colors.Count,
                     sums.v / colors.Count);
-                var argb = Utils.AHSVToARGB(avgs);
+                (uint a, uint r, uint g, uint b) argb = Utils.AHSVToARGB(avgs);
                 combined = Utils.ToUInt(Utils.AHSVToARGB(avgs));
 
                 hue_bucket = (uint)Math.Round(avgs.Item2 * byte.MaxValue) / HUE_BUCKET * HUE_BUCKET;
@@ -164,18 +163,24 @@ public class NNConverter : IImageToASCIIConverter
 
                 //Choose a random glyph from the given class
                 if(options.GlyphClasses.TryGetValue(glyph, out var glyph_class) && glyph_class.Length > 0)
+                {
                     glyph = glyph_class[Random.Shared.Next(glyph_class.Length)];
+                }
 
                 //Record selected choice
                 color_choices[encoded_choices] = glyph;
 
                 //Increment skips for non-selected glyphs
-                foreach(var choice in choices)
+                foreach((double n, int ndx, string glyph) choice in choices)
                 {
-                    if (choice.glyph == glyph)
+                    if(choice.glyph == glyph)
+                    {
                         skips[choice.ndx] = 0;
+                    }
                     else
+                    {
                         skips[choice.ndx]++;
+                    }
                 }
             }
 
@@ -196,10 +201,7 @@ public class NNConverter : IImageToASCIIConverter
     /// <param name="token">A cancellation token to end the task early.</param>
     /// <returns>Either the trained <see cref="Model"/>, or a <see cref="TrainingError"/>.</returns>
     public static Task<OneOf<Model, TrainingError>> TrainAsync(ModelInitParams model_init_params, TrainingSet training_set,
-        Action<string, bool> log, Func<Model, CancellationToken, Task>? on_batch_complete = null, CancellationToken token = default)
-    {
-        return TrainAsync(new Model(model_init_params), training_set, log, on_batch_complete, token);
-    }
+        Action<string, bool> log, Func<Model, CancellationToken, Task>? on_batch_complete = null, CancellationToken token = default) => TrainAsync(new Model(model_init_params), training_set, log, on_batch_complete, token);
 
     /// <summary>
     /// Continue the training of an existing model.
@@ -221,7 +223,7 @@ public class NNConverter : IImageToASCIIConverter
             return new TrainingError(message, ex);
         }
 
-        if (model_initial.Glyphs.Length == 0)
+        if(model_initial.Glyphs.Length == 0)
         {
             return Error("No glyphs were provided.");
         }
@@ -236,26 +238,38 @@ public class NNConverter : IImageToASCIIConverter
             //Init Adam
             Adam adam = new(training_set.LearningRate, training_set.AdamParams.beta_1, training_set.AdamParams.beta_2, model);
 
-            for (int epoch = 0; batches.MoveNext(); epoch++)
+            for(var epoch = 0; batches.MoveNext(); epoch++)
             {
                 token.ThrowIfCancellationRequested();
 
                 Input[] batch = batches.Current;
 
                 //Calculate class weights as being inversely proportional to frequency and confidence
-                var batch_ssim_freq = batch.Select(b => DenseVector.OfArray(b.NormalizedSSIMs))
+                DenseVector batch_ssim_freq = batch.Select(b => DenseVector.OfArray(b.NormalizedSSIMs))
                     .Aggregate((a, b) => a + b);
 
-                var batch_ssim_sum = batch_ssim_freq.Sum();
+                //Normalize based on z-score
+                var batch_ssim_mean = batch_ssim_freq.Mean();
+                var batch_ssim_stddev = batch_ssim_freq.StandardDeviation();
 
-                var class_weights = (DenseVector)batch_ssim_freq.Map(s => 1 - (s / batch_ssim_sum));
+                batch_ssim_freq.MapInplace(s => (s - batch_ssim_mean) / (batch_ssim_stddev == 0 ? 1 : batch_ssim_stddev));
+
+                //Scale to the range 0-1
+                var batch_ssim_min = batch_ssim_freq.Min();
+                var batch_ssim_max = batch_ssim_freq.Max() - batch_ssim_min;
+
+                batch_ssim_freq.MapInplace(s => (s - batch_ssim_min) / (batch_ssim_max == 0 ? 1 : batch_ssim_max));
+
+                //Get logistic weights
+                const double K = 8d, C = 0.4d;
+                var class_weights = (DenseVector)batch_ssim_freq.Map(s => 1 - (1d / (1 + Math.Exp(-K * (s - C)))) + (1d / (1 + Math.Exp(K * C))));
 
                 SemaphoreSlim tasks = new(training_set.Threads, training_set.Threads);
 
                 List<Task<(DenseVector[] activations, DenseVector pointwise_loss, double loss)>> forward_propagation_results = [];
 
                 //Run batch through the neural net
-                foreach (Input? input in batch)
+                foreach(Input? input in batch)
                 {
                     token.ThrowIfCancellationRequested();
 
@@ -274,14 +288,14 @@ public class NNConverter : IImageToASCIIConverter
                             //Compare the output to the expected value
                             DenseVector output = activations[^1];
 
-                            DenseVector ssims = DenseVector.OfArray(input.NormalizedSSIMs);
+                            var ssims = DenseVector.OfArray(input.NormalizedSSIMs);
 
                             //Calculate weighted error using cross entropy loss
-                            double loss = ssims * output.Map(value => Math.Log(Math.Max(EPS, value)))
+                            var loss = ssims * output.Map(value => Math.Log(Math.Max(EPS, value)))
                                 .PointwiseMultiply(class_weights);
 
                             //Calculate weighted pointwise loss using binary cross entropy loss
-                            var pointwise_loss = -1 * (ssims.PointwiseMultiply(output.Map(value => Math.Log(Math.Max(EPS, value))))
+                            MathNet.Numerics.LinearAlgebra.Vector<double> pointwise_loss = -1 * (ssims.PointwiseMultiply(output.Map(value => Math.Log(Math.Max(EPS, value))))
                                 + ssims.Map(s => 1 - s).PointwiseMultiply(output.Map(value => Math.Log(Math.Max(EPS, 1 - value)))))
                                 .PointwiseMultiply(class_weights);
 
@@ -305,18 +319,18 @@ public class NNConverter : IImageToASCIIConverter
                 token.ThrowIfCancellationRequested();
 
                 //Get average loss across batch
-                double avg_loss = batch_activations.Select(a => a.loss).Average();
+                var avg_loss = batch_activations.Select(a => a.loss).Average();
 
                 Log($"Batch loss: {avg_loss}");
 
                 //Get average loss for each batch
-                var avg_class_loss = batch_activations.Select(a => a.pointwise_loss)
+                DenseVector avg_class_loss = batch_activations.Select(a => a.pointwise_loss)
                     .Aggregate((a, b) => a + b) / batch_activations.Length;
 
                 List<Task<(DenseMatrix[]? weights, DenseVector[]? biases)>> backward_propagation_results = [];
 
                 //Propagate batch backwards through the neural net
-                for (int i = 0; i < batch.Length; i++)
+                for(var i = 0; i < batch.Length; i++)
                 {
                     Input input = batch[i];
                     DenseVector[] activations = batch_activations[i].activations;
@@ -351,12 +365,12 @@ public class NNConverter : IImageToASCIIConverter
                 token.ThrowIfCancellationRequested();
 
                 //Average gradients across all trials
-                List<(DenseMatrix[] weights, DenseVector[] biases)> nn_gradients = batch_gradients.Where(g => g.weights != null && g.biases != null).Select(g => (weights: g.weights!, biases: g.biases!)).ToList();
+                var nn_gradients = batch_gradients.Where(g => g.weights != null && g.biases != null).Select(g => (weights: g.weights!, biases: g.biases!)).ToList();
                 (DenseMatrix[] weights, DenseVector[] biases) first_trial_gradients = nn_gradients.First();
-                DenseMatrix[] average_gradients = new DenseMatrix[model.Weights.Length];
-                DenseVector[] average_bias_gradients = new DenseVector[model.Weights.Length];
+                var average_gradients = new DenseMatrix[model.Weights.Length];
+                var average_bias_gradients = new DenseVector[model.Weights.Length];
 
-                for (int l = 0; l < model.Weights.Length; l++)
+                for(var l = 0; l < model.Weights.Length; l++)
                 {
                     token.ThrowIfCancellationRequested();
 
@@ -364,7 +378,7 @@ public class NNConverter : IImageToASCIIConverter
                     DenseMatrix sum = new(first_trial_gradients.weights[l].RowCount, first_trial_gradients.weights[l].ColumnCount);
                     DenseVector bias_sum = new(first_trial_gradients.biases[l].Count);
 
-                    foreach ((DenseMatrix[] weights, DenseVector[] biases) gradient in nn_gradients)
+                    foreach((DenseMatrix[] weights, DenseVector[] biases) gradient in nn_gradients)
                     {
                         token.ThrowIfCancellationRequested();
 
@@ -395,7 +409,7 @@ public class NNConverter : IImageToASCIIConverter
             //Return the trained model
             return model;
         }
-        catch (Exception e)
+        catch(Exception e)
         {
             return Error(e.Message, e);
         }
@@ -409,13 +423,13 @@ public class NNConverter : IImageToASCIIConverter
     /// <returns>The activations from each layer of the neural net.</returns>
     private static DenseVector[] PropagateForwards(Model model, Input input)
     {
-        DenseVector neurons = DenseVector.OfArray(input.NormalizedIntensities);
+        var neurons = DenseVector.OfArray(input.NormalizedIntensities);
 
-        DenseVector[] activations = new DenseVector[model.Weights.Length + 1];
+        var activations = new DenseVector[model.Weights.Length + 1];
         activations[0] = neurons;
 
         //For each layer, propagating forward
-        for (int l = 0; l < model.Weights.Length; l++)
+        for(var l = 0; l < model.Weights.Length; l++)
         {
             DenseMatrix layer = model.Weights[l];
             DenseVector bias = model.Biases[l];
@@ -423,7 +437,7 @@ public class NNConverter : IImageToASCIIConverter
             //Take dot product of weights and neurons, and add bias to get activation inputs
             DenseVector product = (layer * neurons) + bias;
 
-            if (l == model.Weights.Length - 1)
+            if(l == model.Weights.Length - 1)
             {
                 //Apply output activation function (softmax)
                 product = NormalizedSoftmax(product);
@@ -451,19 +465,19 @@ public class NNConverter : IImageToASCIIConverter
     /// <returns>The gradients for the weights and biases.</returns>
     private static (DenseMatrix[]? weight_gradients, DenseVector[]? bias_gradients) PropagateBackwards(Model model, Input input, DenseVector[] activations, DenseVector class_weights)
     {
-        DenseVector ssims = DenseVector.OfArray(input.NormalizedSSIMs);
+        var ssims = DenseVector.OfArray(input.NormalizedSSIMs);
 
-        DenseMatrix[] all_gradients = new DenseMatrix[model.Weights.Length];
-        DenseVector[] all_errors = new DenseVector[model.Weights.Length];
-        DenseVector[] all_biases = new DenseVector[model.Weights.Length];
+        var all_gradients = new DenseMatrix[model.Weights.Length];
+        var all_errors = new DenseVector[model.Weights.Length];
+        var all_biases = new DenseVector[model.Weights.Length];
 
-        for (int l = all_gradients.Length - 1; l >= 0; l--)
+        for(var l = all_gradients.Length - 1; l >= 0; l--)
         {
             //Calculate the partial derivative of loss wrt to the weights of layer l
             DenseMatrix weights = model.Weights[l];
             DenseVector neurons = activations[l + 1];
 
-            DenseVector[] layer_gradients = new DenseVector[weights.RowCount];
+            var layer_gradients = new DenseVector[weights.RowCount];
             DenseVector layer_bias = new(weights.RowCount);
 
             DenseVector error_term;
@@ -509,26 +523,26 @@ public class NNConverter : IImageToASCIIConverter
     /// <param name="epoch"></param>
     private static void UpdateAdamWeights(Adam adam, Model model, DenseMatrix[] gradients, DenseVector[] bias_gradients, double l2_coeff, int epoch)
     {
-        for(int l = 0; l < model.Weights.Length; l++)
+        for(var l = 0; l < model.Weights.Length; l++)
         {
             //Update first moment
-            adam.Moment1[l] = adam.Decay.Beta1 * adam.Moment1[l] + (1 - adam.Decay.Beta1) * gradients[l];
-            adam.Bias1[l] = adam.Decay.Beta1 * adam.Bias1[l] + (1 - adam.Decay.Beta1) * bias_gradients[l];
+            adam.Moment1[l] = (adam.Decay.Beta1 * adam.Moment1[l]) + ((1 - adam.Decay.Beta1) * gradients[l]);
+            adam.Bias1[l] = (adam.Decay.Beta1 * adam.Bias1[l]) + ((1 - adam.Decay.Beta1) * bias_gradients[l]);
 
             //Update second moment
-            adam.Moment2[l] = (DenseMatrix)(adam.Decay.Beta2 * adam.Moment2[l] + (1 - adam.Decay.Beta2) * gradients[l].PointwiseMultiply(gradients[l]));
-            adam.Bias2[l] = (DenseVector)(adam.Decay.Beta2 * adam.Bias2[l] + (1 - adam.Decay.Beta2) * bias_gradients[l].PointwiseMultiply(bias_gradients[l]));
+            adam.Moment2[l] = (DenseMatrix)((adam.Decay.Beta2 * adam.Moment2[l]) + ((1 - adam.Decay.Beta2) * gradients[l].PointwiseMultiply(gradients[l])));
+            adam.Bias2[l] = (DenseVector)((adam.Decay.Beta2 * adam.Bias2[l]) + ((1 - adam.Decay.Beta2) * bias_gradients[l].PointwiseMultiply(bias_gradients[l])));
 
             //Compute bias-corrected first moment
-            var moment1_corrected = adam.Moment1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
-            var bias1_corrected = adam.Bias1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
+            MathNet.Numerics.LinearAlgebra.Matrix<double> moment1_corrected = adam.Moment1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
+            DenseVector bias1_corrected = adam.Bias1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
 
             //Compute bias-corrected second moment
-            var moment2_corrected = adam.Moment2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
-            var bias2_corrected = adam.Bias2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
+            MathNet.Numerics.LinearAlgebra.Matrix<double> moment2_corrected = adam.Moment2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
+            DenseVector bias2_corrected = adam.Bias2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
 
-            var adam_learning_rate = moment1_corrected.PointwiseDivide(moment2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
-            var adam_bias_learning_rate = bias1_corrected.PointwiseDivide(bias2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
+            MathNet.Numerics.LinearAlgebra.Matrix<double> adam_learning_rate = moment1_corrected.PointwiseDivide(moment2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
+            MathNet.Numerics.LinearAlgebra.Vector<double> adam_bias_learning_rate = bias1_corrected.PointwiseDivide(bias2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
 
             //L2 Regularization
             adam_learning_rate += l2_coeff * model.Weights[l];
@@ -545,12 +559,12 @@ public class NNConverter : IImageToASCIIConverter
     /// <param name="weights">The matrix to initialize</param>
     private static void InitializeWeightsHeNormal(double[,] weights)
     {
-        int fan_in = weights.GetLength(1);
-        double std_dev = Math.Sqrt(2d / fan_in);
+        var fan_in = weights.GetLength(1);
+        var std_dev = Math.Sqrt(2d / fan_in);
 
-        for (int i = 0; i < weights.GetLength(0); i++)
+        for(var i = 0; i < weights.GetLength(0); i++)
         {
-            for (int j = 0; j < weights.GetLength(1); j++)
+            for(var j = 0; j < weights.GetLength(1); j++)
             {
                 weights[i, j] = (Random.Shared.NextDouble() * std_dev * Math.Sqrt(12)) - (std_dev * Math.Sqrt(3));
             }
@@ -563,9 +577,9 @@ public class NNConverter : IImageToASCIIConverter
     /// <param name="biases">The vector to initialize</param>
     private static void InitializeWeightsHeNormal(double[] biases)
     {
-        double std_dev = Math.Sqrt(2d);
+        var std_dev = Math.Sqrt(2d);
 
-        for (int i = 0; i < biases.Length; i++)
+        for(var i = 0; i < biases.Length; i++)
         {
             biases[i] = (Random.Shared.NextDouble() * std_dev * Math.Sqrt(12)) - (std_dev * Math.Sqrt(3));
         }
@@ -578,9 +592,9 @@ public class NNConverter : IImageToASCIIConverter
     /// <returns>The input with softmax applied</returns>
     private static DenseVector NormalizedSoftmax(DenseVector input)
     {
-        double max = input.Max();
-        double[] exp = input.Select(x => Math.Exp(x - max)).ToArray();
-        double sum = exp.Sum();
+        var max = input.Max();
+        var exp = input.Select(x => Math.Exp(x - max)).ToArray();
+        var sum = exp.Sum();
         return DenseVector.OfArray(exp.Select(x => x / sum).ToArray());
     }
 
@@ -630,29 +644,29 @@ public class NNConverter : IImageToASCIIConverter
             Biases = new DenseVector[1 + model_init_params.HiddenLayerCount];
 
             //Initialize weights
-            for (int w = 0; w < Weights.Length; w++)
+            for(var w = 0; w < Weights.Length; w++)
             {
-                uint next_activations_count = w == Weights.Length - 1
+                var next_activations_count = w == Weights.Length - 1
                     ? (uint)Glyphs.Length
                     : model_init_params.HiddenLayerNeuronCount;
 
-                uint neuron_count = w == 0
+                var neuron_count = w == 0
                     ? model_init_params.FeatureCount
                     : model_init_params.HiddenLayerNeuronCount;
 
-                double[,] layer = new double[next_activations_count, neuron_count];
+                var layer = new double[next_activations_count, neuron_count];
                 InitializeWeightsHeNormal(layer);
                 Weights[w] = DenseMatrix.OfArray(layer);
             }
 
             //Initialize biases
-            for (int b = 0; b < Biases.Length; b++)
+            for(var b = 0; b < Biases.Length; b++)
             {
-                uint next_activations_count = b == Biases.Length - 1
+                var next_activations_count = b == Biases.Length - 1
                     ? (uint)Glyphs.Length
                     : model_init_params.HiddenLayerNeuronCount;
 
-                double[] layer = new double[next_activations_count];
+                var layer = new double[next_activations_count];
                 InitializeWeightsHeNormal(layer);
                 Biases[b] = DenseVector.OfArray(layer);
             }
@@ -662,10 +676,7 @@ public class NNConverter : IImageToASCIIConverter
         /// Create a deep copy of the model
         /// </summary>
         /// <returns></returns>
-        public Model Clone()
-        {
-            return new([.. Glyphs], Alpha, Weights.Select(w => (DenseMatrix)w.Clone()).ToArray(), Biases.Select(b => (DenseVector)b.Clone()).ToArray());
-        }
+        public Model Clone() => new([.. Glyphs], Alpha, Weights.Select(w => (DenseMatrix)w.Clone()).ToArray(), Biases.Select(b => (DenseVector)b.Clone()).ToArray());
 
         /// <summary>
         /// Serialize the model as an array of bytes.
@@ -679,7 +690,7 @@ public class NNConverter : IImageToASCIIConverter
             ms.Write(BitConverter.GetBytes(Glyphs.Length));
 
             //Write glyphs
-            foreach (string glyph in Glyphs)
+            foreach(var glyph in Glyphs)
             {
                 ms.Write(Encoding.ASCII.GetBytes(glyph));
             }
@@ -690,7 +701,7 @@ public class NNConverter : IImageToASCIIConverter
             //Write number of layers
             ms.Write(BitConverter.GetBytes(Weights.Length));
 
-            for (int w = 0; w < Weights.Length; w++)
+            for(var w = 0; w < Weights.Length; w++)
             {
                 DenseMatrix weights = Weights[w];
                 DenseVector biases = Biases[w];
@@ -700,16 +711,16 @@ public class NNConverter : IImageToASCIIConverter
                 ms.Write(BitConverter.GetBytes(weights.ColumnCount));
 
                 //Write weights
-                for (int i = 0; i < weights.RowCount; i++)
+                for(var i = 0; i < weights.RowCount; i++)
                 {
-                    for (int j = 0; j < weights.ColumnCount; j++)
+                    for(var j = 0; j < weights.ColumnCount; j++)
                     {
                         ms.Write(BitConverter.GetBytes(weights[i, j]));
                     }
                 }
 
                 //Write biases
-                for (int i = 0; i < biases.Count; i++)
+                for(var i = 0; i < biases.Count; i++)
                 {
                     ms.Write(BitConverter.GetBytes(biases[i]));
                 }
@@ -725,46 +736,46 @@ public class NNConverter : IImageToASCIIConverter
         /// <returns>A model.</returns>
         public static Model FromBytes(byte[] bytes)
         {
-            int offset = 0;
+            var offset = 0;
 
             //Get number of glyphs
-            int glyph_count = BitConverter.ToInt32(bytes, offset);
+            var glyph_count = BitConverter.ToInt32(bytes, offset);
             offset += sizeof(int);
 
             //Get glyphs
-            string[] glyphs = new string[glyph_count];
+            var glyphs = new string[glyph_count];
 
-            for (int g = 0; g < glyph_count; g++)
+            for(var g = 0; g < glyph_count; g++)
             {
                 glyphs[g] = Encoding.ASCII.GetString(bytes, offset, 1);
                 offset += sizeof(byte);
             }
 
             //Get alpha
-            double alpha = BitConverter.ToDouble(bytes, offset);
+            var alpha = BitConverter.ToDouble(bytes, offset);
             offset += sizeof(double);
 
             //Get number of layers
-            int layers = BitConverter.ToInt32(bytes, offset);
+            var layers = BitConverter.ToInt32(bytes, offset);
             offset += sizeof(int);
 
-            DenseMatrix[] weights = new DenseMatrix[layers];
-            DenseVector[] biases = new DenseVector[layers];
+            var weights = new DenseMatrix[layers];
+            var biases = new DenseVector[layers];
 
-            for (int l = 0; l < layers; l++)
+            for(var l = 0; l < layers; l++)
             {
                 //Get dimensions of layer
-                int m = BitConverter.ToInt32(bytes, offset);
+                var m = BitConverter.ToInt32(bytes, offset);
                 offset += sizeof(int);
-                int n = BitConverter.ToInt32(bytes, offset);
+                var n = BitConverter.ToInt32(bytes, offset);
                 offset += sizeof(int);
 
-                double[,] layer = new double[m, n];
+                var layer = new double[m, n];
 
                 //Read in weights for layer
-                for (int i = 0; i < m; i++)
+                for(var i = 0; i < m; i++)
                 {
-                    for (int j = 0; j < n; j++)
+                    for(var j = 0; j < n; j++)
                     {
                         layer[i, j] = BitConverter.ToDouble(bytes, offset);
                         offset += sizeof(double);
@@ -773,10 +784,10 @@ public class NNConverter : IImageToASCIIConverter
 
                 weights[l] = DenseMatrix.OfArray(layer);
 
-                double[] bias = new double[m];
+                var bias = new double[m];
 
                 //Read in biases for layer
-                for (int i = 0; i < m; i++)
+                for(var i = 0; i < m; i++)
                 {
                     bias[i] = BitConverter.ToDouble(bytes, offset);
                     offset += sizeof(double);
@@ -788,10 +799,7 @@ public class NNConverter : IImageToASCIIConverter
             return new(glyphs, alpha, weights, biases);
         }
 
-        public override bool Equals(object? obj)
-        {
-            return Equals(obj as Model);
-        }
+        public override bool Equals(object? obj) => Equals(obj as Model);
 
         public bool Equals(Model? other)
         {
@@ -802,20 +810,11 @@ public class NNConverter : IImageToASCIIConverter
                 Alpha == other.Alpha;
         }
 
-        public override int GetHashCode()
-        {
-            return HashCode.Combine(Glyphs, Weights, Biases, Alpha);
-        }
+        public override int GetHashCode() => HashCode.Combine(Glyphs, Weights, Biases, Alpha);
 
-        public static bool operator ==(Model? left, Model? right)
-        {
-            return (left is null == right is null) && (left is null || left.Equals(right));
-        }
+        public static bool operator ==(Model? left, Model? right) => ((left is null) == (right is null)) && (left is null || left.Equals(right));
 
-        public static bool operator !=(Model? left, Model? right)
-        {
-            return !(left == right);
-        }
+        public static bool operator !=(Model? left, Model? right) => !(left == right);
     }
 
     /// <summary>
@@ -931,7 +930,7 @@ public class NNConverter : IImageToASCIIConverter
             Bias2 = new DenseVector[model.Weights.Length];
 
             //Init all values to 0
-            for(int i = 0; i < model.Weights.Length; i++)
+            for(var i = 0; i < model.Weights.Length; i++)
             {
                 Moment1[i] = new DenseMatrix(model.Weights[i].RowCount, model.Weights[i].ColumnCount);
                 Moment2[i] = new DenseMatrix(model.Weights[i].RowCount, model.Weights[i].ColumnCount);
@@ -965,10 +964,7 @@ public class NNConverter : IImageToASCIIConverter
                 var mean = Intensities.Mean();
                 var std_dev = Intensities.StandardDeviation();
 
-                if (std_dev == 0 || double.IsNaN(mean) || double.IsNaN(std_dev))
-                    return Intensities;
-
-                return [.. Intensities.Select(s => (s - mean) / std_dev)];
+                return std_dev == 0 || double.IsNaN(mean) || double.IsNaN(std_dev) ? Intensities : ([.. Intensities.Select(s => (s - mean) / std_dev)]);
             }
         }
 
@@ -987,23 +983,22 @@ public class NNConverter : IImageToASCIIConverter
             {
                 var max = SSIMs.Max();
 
-                if (max == 0)
+                if(max == 0)
+                {
                     return SSIMs;
+                }
 
                 //Get gaussian weights based on percentage of max
-                var weights = DenseVector.OfEnumerable(SSIMs.Select(s => Math.Exp(-Math.Pow(s / max - 1, 2) / (2 * STD_DEV * STD_DEV)) / (Math.Sqrt(2 * Math.PI) * STD_DEV)));
+                var weights = DenseVector.OfEnumerable(SSIMs.Select(s => Math.Exp(-Math.Pow((s / max) - 1, 2) / (2 * STD_DEV * STD_DEV)) / (Math.Sqrt(2 * Math.PI) * STD_DEV)));
 
                 //Penalize based on percentage of max
-                var penalized = weights.PointwiseMultiply(DenseVector.OfArray(SSIMs))
+                MathNet.Numerics.LinearAlgebra.Vector<double> penalized = weights.PointwiseMultiply(DenseVector.OfArray(SSIMs))
                     .Map(s => s <= COERCE_TO_ZERO ? 0 : s);
 
                 //Divide by sum to add up to 1
                 var sum = penalized.Sum();
 
-                if (sum == 0)
-                    return [.. penalized];
-
-                return penalized.Select(p => p / sum).ToArray();
+                return sum == 0 ? ([.. penalized]) : penalized.Select(p => p / sum).ToArray();
             }
         }
     }

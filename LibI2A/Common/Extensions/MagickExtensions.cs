@@ -15,7 +15,7 @@ public static class MagickExtensions
             Utils.ScaleUShort(color.B)));
 
         //Weight HSV components
-        (uint a, double, double, double) weighted = (hsv.a, 
+        (uint a, double, double, double) weighted = (hsv.a,
             double.Clamp(hsv.h * HSVWeights.H, 0, 1),
             double.Clamp(hsv.s * HSVWeights.S, 0, 1),
             double.Clamp(hsv.v * HSVWeights.V, 0, 1));

@@ -4,53 +4,47 @@ namespace LibI2A.Common;
 
 public static class Utils
 {
-    public static double Modulo(double r, double m)
-    {
-        return ((r % m) + m) % m;
-    }
+    public static double Modulo(double r, double m) => ((r % m) + m) % m;
 
-    public static T AggregateOrDefault<T>(this IEnumerable<T> source, Func<T, T, T> func, T def)
-    {
-        return source == null || !source.Any() ? def : source.Aggregate(func);
-    }
+    public static T AggregateOrDefault<T>(this IEnumerable<T> source, Func<T, T, T> func, T def) => source == null || !source.Any() ? def : source.Aggregate(func);
 
     public static (uint a, double h, double s, double v) ARGBToAHSV((uint a, uint r, uint g, uint b) argb)
     {
         (double R, double G, double B) = (argb.r / 255f, argb.g / 255f, argb.b / 255f);
-        double XPMin = Math.Min(R, Math.Min(G, B));
-        double XPMax = Math.Max(R, Math.Max(G, B));
-        double XPD = XPMax - XPMin;
+        var XPMin = Math.Min(R, Math.Min(G, B));
+        var XPMax = Math.Max(R, Math.Max(G, B));
+        var XPD = XPMax - XPMin;
 
-        (double h, double s, double v) = (0, 0, XPMax);
+        (double h, double s, var v) = (0, 0, XPMax);
 
         //Not greyscale, set chroma data
-        if (XPD != 0)
+        if(XPD != 0)
         {
             s = XPD / XPMax;
 
-            double delta_r = (((XPMax - R) / 6) + (XPMax / 2)) / XPMax;
-            double delta_g = (((XPMax - G) / 6) + (XPMax / 2)) / XPMax;
-            double delta_b = (((XPMax - B) / 6) + (XPMax / 2)) / XPMax;
+            var delta_r = (((XPMax - R) / 6) + (XPMax / 2)) / XPMax;
+            var delta_g = (((XPMax - G) / 6) + (XPMax / 2)) / XPMax;
+            var delta_b = (((XPMax - B) / 6) + (XPMax / 2)) / XPMax;
 
-            if (R == XPMax)
+            if(R == XPMax)
             {
                 h = delta_b - delta_g;
             }
-            else if (G == XPMax)
+            else if(G == XPMax)
             {
                 h = (1f / 3f) + delta_r - delta_b;
             }
-            else if (B == XPMax)
+            else if(B == XPMax)
             {
                 h = (2f / 3f) + delta_g - delta_r;
             }
 
-            if (h < 0)
+            if(h < 0)
             {
                 h += 1;
             }
 
-            if (h > 1)
+            if(h > 1)
             {
                 h -= 1;
             }
@@ -61,28 +55,28 @@ public static class Utils
 
     public static (uint a, uint r, uint g, uint b) AHSVToARGB((uint a, double h, double s, double v) ahsv)
     {
-        uint a = ahsv.a;
+        var a = ahsv.a;
         double r, g, b;
 
         //If saturation is 0, no chroma
-        if (ahsv.s == 0)
+        if(ahsv.s == 0)
         {
             (r, g, b) = (ahsv.v, ahsv.v, ahsv.v);
         }
         else
         {
-            double h = ahsv.h * 6;
-            if (h == 6)
+            var h = ahsv.h * 6;
+            if(h == 6)
             {
                 h = 0;
             }
 
-            int i = (int)Math.Floor(h);
+            var i = (int)Math.Floor(h);
 
-            double v0 = ahsv.v;
-            double v1 = ahsv.v * (1 - ahsv.s);
-            double v2 = ahsv.v * (1 - (ahsv.s * (h - i)));
-            double v3 = ahsv.v * (1 - (ahsv.s * (1 - (h - i))));
+            var v0 = ahsv.v;
+            var v1 = ahsv.v * (1 - ahsv.s);
+            var v2 = ahsv.v * (1 - (ahsv.s * (h - i)));
+            var v3 = ahsv.v * (1 - (ahsv.s * (1 - (h - i))));
 
             (r, g, b) = i switch
             {
@@ -114,34 +108,25 @@ public static class Utils
 
         //Linearize each component
         //(RGB is encoded in a power curve whereas luminance is linear)
-        (double r_lin, double g_lin, double b_lin) = (Math.Pow(argb.r / (double)0xFF, LINEAR_POWER), Math.Pow(argb.g / (double)0xFF, LINEAR_POWER), Math.Pow(argb.b / (double)0xFF, LINEAR_POWER));
+        (var r_lin, var g_lin, var b_lin) = (Math.Pow(argb.r / (double)0xFF, LINEAR_POWER), Math.Pow(argb.g / (double)0xFF, LINEAR_POWER), Math.Pow(argb.b / (double)0xFF, LINEAR_POWER));
 
         //Calculate luminance
-        double y = (COEFF_R * r_lin) + (COEFF_G * g_lin) + (COEFF_B * b_lin);
+        var y = (COEFF_R * r_lin) + (COEFF_G * g_lin) + (COEFF_B * b_lin);
 
         return y;
     }
 
-    public static byte ScaleUShort(ushort n)
-    {
-        return (byte)Math.Min((double)n / ushort.MaxValue * byte.MaxValue, byte.MaxValue);
-    }
+    public static byte ScaleUShort(ushort n) => (byte)Math.Min((double)n / ushort.MaxValue * byte.MaxValue, byte.MaxValue);
 
-    public static (uint a, uint r, uint g, uint b) ToARGB(uint color)
-    {
-        return ((color >> 24) & 0xFF, (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
-    }
+    public static (uint a, uint r, uint g, uint b) ToARGB(uint color) => ((color >> 24) & 0xFF, (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
 
-    public static uint ToUInt((uint a, uint r, uint g, uint b) ARGB)
-    {
-        return (ARGB.a << 24) + (ARGB.r << 16) + (ARGB.g << 8) + ARGB.b;
-    }
+    public static uint ToUInt((uint a, uint r, uint g, uint b) ARGB) => (ARGB.a << 24) + (ARGB.r << 16) + (ARGB.g << 8) + ARGB.b;
 
     public static (uint a, uint r, uint g, uint b) CoalescePixel(IPixel<ushort> pixel, Stack<IMagickImage<ushort>> previousLayers)
     {
         IMagickColor<ushort>? pixel_color = pixel.ToColor();
 
-        if (pixel_color == null)
+        if(pixel_color == null)
         {
             return (0, 0, 0, 0);
         }
@@ -151,17 +136,17 @@ public static class Utils
         Stack<IMagickImage<ushort>> prevLayersTemp = new();
 
         //If color has any transparency, combine with previous layer
-        while (a < 0xFF && previousLayers.TryPop(out IMagickImage<ushort>? prev_image))
+        while(a < 0xFF && previousLayers.TryPop(out IMagickImage<ushort>? prev_image))
         {
             prevLayersTemp.Push(prev_image);
             IPixel<ushort>? prev_pixel = prev_image.GetPixels().Where(p => p.X == pixel.X && p.Y == pixel.Y).FirstOrDefault();
             IMagickColor<ushort>? prev_color = prev_pixel?.ToColor();
 
-            if (prev_color != null)
+            if(prev_color != null)
             {
                 (uint prev_a, uint prev_r, uint prev_g, uint prev_b) = (ScaleUShort(prev_color.A), ScaleUShort(prev_color.R), ScaleUShort(prev_color.G), ScaleUShort(prev_color.B));
 
-                double ratio = (double)a / 0xFF;
+                var ratio = (double)a / 0xFF;
 
                 a = prev_a + (uint)Math.Floor(ratio * (0xFF - prev_a));
                 r = (uint)Math.Floor(((1f - ratio) * prev_r) + (ratio * r));
@@ -171,7 +156,7 @@ public static class Utils
         }
 
         //Push previous images back to stack
-        while (prevLayersTemp.TryPop(out IMagickImage<ushort>? layer))
+        while(prevLayersTemp.TryPop(out IMagickImage<ushort>? layer))
         {
             previousLayers.Push(layer);
         }
@@ -181,21 +166,21 @@ public static class Utils
 
     public static T[] StretchArray<T>(T[] array, int new_size)
     {
-        if (new_size <= array.Length)
+        if(new_size <= array.Length)
         {
             return array;
         }
-        else if (new_size % array.Length != 0)
+        else if(new_size % array.Length != 0)
         {
             throw new Exception($"new_size {new_size} must be an integer multiple of {array.Length}");
         }
 
-        T[] rv = new T[new_size];
-        int factor = new_size / array.Length;
+        var rv = new T[new_size];
+        var factor = new_size / array.Length;
 
-        for (int i = 0, k = 0; i < array.Length; i++)
+        for(int i = 0, k = 0; i < array.Length; i++)
         {
-            for (int j = 0; j < factor; j++)
+            for(var j = 0; j < factor; j++)
             {
                 rv[k++] = array[i];
             }
@@ -206,13 +191,13 @@ public static class Utils
 
     public static double Truncate(double d, int precision)
     {
-        double factor = Math.Pow(10, precision);
+        var factor = Math.Pow(10, precision);
         return Math.Floor(d * factor) / factor;
     }
 
     public static double Round(double d, int precision)
     {
-        double factor = Math.Pow(10, precision);
+        var factor = Math.Pow(10, precision);
         return Math.Round(d * factor) / factor;
     }
 

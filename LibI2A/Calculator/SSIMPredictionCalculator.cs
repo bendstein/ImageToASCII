@@ -27,10 +27,12 @@ public class SSIMPredictionCalculator : ISSIMCalculator
 
     public double CalculateSSIM(PixelImage image, string glyph)
     {
-        if (!model.GlyphModels.TryGetValue(glyph, out var submodel))
+        if(!model.GlyphModels.TryGetValue(glyph, out SubModel? submodel))
+        {
             return 0d;
+        }
 
-        var activations = SSIMPredictionTrainer.PropagateForwards(submodel, new()
+        DenseVector[] activations = SSIMPredictionTrainer.PropagateForwards(submodel, new()
         {
             Intensities = [.. image.GetIntensities()],
             SSIMs = []
@@ -80,8 +82,10 @@ public static class SSIMPredictionTrainer
             return new TrainingError(message, ex);
         }
 
-        if (model_initial.GlyphModels.Count == 0)
+        if(model_initial.GlyphModels.Count == 0)
+        {
             return Error("No glyphs were provided.");
+        }
 
         try
         {
@@ -92,33 +96,33 @@ public static class SSIMPredictionTrainer
 
             //Init adam
             var adams = new Adam[model.Glyphs.Length];
-            for(int g = 0; g < model.Glyphs.Length; g++)
+            for(var g = 0; g < model.Glyphs.Length; g++)
             {
-                var submodel = model.GlyphModels[model.Glyphs[g]];
+                SubModel submodel = model.GlyphModels[model.Glyphs[g]];
                 adams[g] = new(settings.LearningRate, settings.AdamParams.beta_1, settings.AdamParams.beta_2, submodel);
             }
 
             //Run each mini-batch
-            for (int epoch = 0; batches.MoveNext(); epoch++)
+            for(var epoch = 0; batches.MoveNext(); epoch++)
             {
                 model = model.Clone();
 
                 token.ThrowIfCancellationRequested();
-                
-                var batch = batches.Current;
+
+                SSIMPredictionInput[] batch = batches.Current;
 
                 SemaphoreSlim tasks = new(settings.Threads, settings.Threads);
 
                 //Run each glyph-model (one-v-all)
-                for(int g = 0; g < model.Glyphs.Length; g++)
+                for(var g = 0; g < model.Glyphs.Length; g++)
                 {
-                    var adam = adams[g];
-                    var submodel = model.GlyphModels[model.Glyphs[g]];
+                    Adam adam = adams[g];
+                    SubModel submodel = model.GlyphModels[model.Glyphs[g]];
 
                     List<Task<(DenseVector[] activations, double loss)>> propagate_forwards = [];
 
                     //Propagate each input forwards through the model
-                    foreach (var input in batch)
+                    foreach(SSIMPredictionInput input in batch)
                     {
                         token.ThrowIfCancellationRequested();
                         await tasks.WaitAsync(token);
@@ -130,7 +134,7 @@ public static class SSIMPredictionTrainer
                             {
                                 token.ThrowIfCancellationRequested();
 
-                                var activations = PropagateForwards(submodel, input);
+                                DenseVector[] activations = PropagateForwards(submodel, input);
 
                                 token.ThrowIfCancellationRequested();
 
@@ -139,13 +143,13 @@ public static class SSIMPredictionTrainer
                                 var expected = input.SSIMs[g];
 
                                 //Calculate loss using binary cross entropy loss]
-                                double loss = expected * Math.Log(output + EPS) + (1 - expected) * Math.Log(1 - output + EPS);
+                                var loss = (expected * Math.Log(output + EPS)) + ((1 - expected) * Math.Log(1 - output + EPS));
 
                                 return (activations, loss);
                             }
                             finally
                             {
-                                tasks.Release();
+                                _ = tasks.Release();
                             }
                         }, token));
                     }
@@ -153,23 +157,23 @@ public static class SSIMPredictionTrainer
                     token.ThrowIfCancellationRequested();
 
                     //Wait for all forward propagation to complete
-                    var propagate_forwards_results = await Task.WhenAll(propagate_forwards);
+                    (DenseVector[] activations, double loss)[] propagate_forwards_results = await Task.WhenAll(propagate_forwards);
 
                     token.ThrowIfCancellationRequested();
 
                     //Get average loss across batch
-                    double avg_loss = propagate_forwards_results.Select(r => r.loss).Average();
+                    var avg_loss = propagate_forwards_results.Select(r => r.loss).Average();
                     Log($"Epoch: {epoch}; Glyph: {model.Glyphs[g]}; Avg Loss: {avg_loss}");
 
                     List<Task<(DenseMatrix[] weight_gradients, DenseVector[] bias_gradients)>> propagate_backwards = [];
 
                     //Propagate each input backwards through the model
-                    for(int i = 0; i < batch.Length; i++)
+                    for(var i = 0; i < batch.Length; i++)
                     {
                         token.ThrowIfCancellationRequested();
 
-                        var input = batch[i];
-                        (var activations, _) = propagate_forwards_results[i];
+                        SSIMPredictionInput input = batch[i];
+                        (DenseVector[]? activations, _) = propagate_forwards_results[i];
 
                         await tasks.WaitAsync(token);
 
@@ -183,7 +187,7 @@ public static class SSIMPredictionTrainer
                             }
                             finally
                             {
-                                tasks.Release();
+                                _ = tasks.Release();
                             }
                         }, token));
                     }
@@ -191,16 +195,16 @@ public static class SSIMPredictionTrainer
                     token.ThrowIfCancellationRequested();
 
                     //Wait for all backward propagation to complete
-                    var propagate_backwards_results = await Task.WhenAll(propagate_backwards);
+                    (DenseMatrix[] weight_gradients, DenseVector[] bias_gradients)[] propagate_backwards_results = await Task.WhenAll(propagate_backwards);
 
                     token.ThrowIfCancellationRequested();
 
                     //Average gradients across all trials
                     (DenseMatrix[] weights, DenseVector[] biases) first_trial_gradients = propagate_backwards_results.First();
-                    DenseMatrix[] average_gradients = new DenseMatrix[submodel.Weights.Length];
-                    DenseVector[] average_bias_gradients = new DenseVector[submodel.Weights.Length];
+                    var average_gradients = new DenseMatrix[submodel.Weights.Length];
+                    var average_bias_gradients = new DenseVector[submodel.Weights.Length];
 
-                    for (int l = 0; l < submodel.Weights.Length; l++)
+                    for(var l = 0; l < submodel.Weights.Length; l++)
                     {
                         token.ThrowIfCancellationRequested();
 
@@ -208,7 +212,7 @@ public static class SSIMPredictionTrainer
                         DenseMatrix sum = new(first_trial_gradients.weights[l].RowCount, first_trial_gradients.weights[l].ColumnCount);
                         DenseVector bias_sum = new(first_trial_gradients.biases[l].Count);
 
-                        foreach ((DenseMatrix[] weight_gradients, DenseVector[] bias_gradients) gradient in propagate_backwards_results)
+                        foreach((DenseMatrix[] weight_gradients, DenseVector[] bias_gradients) gradient in propagate_backwards_results)
                         {
                             token.ThrowIfCancellationRequested();
 
@@ -243,13 +247,13 @@ public static class SSIMPredictionTrainer
 
     public static DenseVector[] PropagateForwards(SubModel model, SSIMPredictionInput input)
     {
-        DenseVector neurons = DenseVector.OfArray(input.NormalizedIntensities);
+        var neurons = DenseVector.OfArray(input.NormalizedIntensities);
 
-        DenseVector[] activations = new DenseVector[model.Weights.Length + 1];
+        var activations = new DenseVector[model.Weights.Length + 1];
         activations[0] = neurons;
 
         //For each layer, propagating forward
-        for (int l = 0; l < model.Weights.Length; l++)
+        for(var l = 0; l < model.Weights.Length; l++)
         {
             DenseMatrix layer = model.Weights[l];
             DenseVector bias = model.Biases[l];
@@ -257,7 +261,7 @@ public static class SSIMPredictionTrainer
             //Take dot product of weights and neurons, and add bias to get activation inputs
             DenseVector product = (layer * neurons) + bias;
 
-            if (l == model.Weights.Length - 1)
+            if(l == model.Weights.Length - 1)
             {
                 //Apply output activation function (Sigmoid)
                 product.MapInplace(value => 1 / (1 + Math.Exp(-value)));
@@ -278,23 +282,23 @@ public static class SSIMPredictionTrainer
 
     public static (DenseMatrix[] weight_gradients, DenseVector[] bias_gradients) PropagateBackwards(SubModel model, double expected_value, DenseVector[] activations)
     {
-        DenseVector expected = DenseVector.OfArray([expected_value]);
-        DenseMatrix[] all_gradients = new DenseMatrix[model.Weights.Length];
-        DenseVector[] all_errors = new DenseVector[model.Weights.Length];
-        DenseVector[] all_biases = new DenseVector[model.Weights.Length];
+        var expected = DenseVector.OfArray([expected_value]);
+        var all_gradients = new DenseMatrix[model.Weights.Length];
+        var all_errors = new DenseVector[model.Weights.Length];
+        var all_biases = new DenseVector[model.Weights.Length];
 
-        for (int l = all_gradients.Length - 1; l >= 0; l--)
+        for(var l = all_gradients.Length - 1; l >= 0; l--)
         {
             //Calculate the partial derivative of loss wrt to the weights of layer l
             DenseMatrix weights = model.Weights[l];
             DenseVector neurons = activations[l + 1];
 
-            DenseVector[] layer_gradients = new DenseVector[weights.RowCount];
+            var layer_gradients = new DenseVector[weights.RowCount];
             DenseVector layer_bias = new(weights.RowCount);
 
             DenseVector error_term;
 
-            if (l == all_gradients.Length - 1)
+            if(l == all_gradients.Length - 1)
             {
                 //Gradient of binary cross-entropy loss wrt sigmoid activation simplifies to predicted - expected
                 error_term = neurons - expected;
@@ -329,12 +333,12 @@ public static class SSIMPredictionTrainer
     /// <param name="weights">The matrix to initialize</param>
     public static void InitializeWeightsHeNormal(double[,] weights)
     {
-        int fan_in = weights.GetLength(1);
-        double std_dev = Math.Sqrt(2d / fan_in);
+        var fan_in = weights.GetLength(1);
+        var std_dev = Math.Sqrt(2d / fan_in);
 
-        for (int i = 0; i < weights.GetLength(0); i++)
+        for(var i = 0; i < weights.GetLength(0); i++)
         {
-            for (int j = 0; j < weights.GetLength(1); j++)
+            for(var j = 0; j < weights.GetLength(1); j++)
             {
                 weights[i, j] = (Random.Shared.NextDouble() * std_dev * Math.Sqrt(12)) - (std_dev * Math.Sqrt(3));
             }
@@ -347,9 +351,9 @@ public static class SSIMPredictionTrainer
     /// <param name="biases">The vector to initialize</param>
     public static void InitializeWeightsHeNormal(double[] biases)
     {
-        double std_dev = Math.Sqrt(2d);
+        var std_dev = Math.Sqrt(2d);
 
-        for (int i = 0; i < biases.Length; i++)
+        for(var i = 0; i < biases.Length; i++)
         {
             biases[i] = (Random.Shared.NextDouble() * std_dev * Math.Sqrt(12)) - (std_dev * Math.Sqrt(3));
         }
@@ -366,26 +370,26 @@ public static class SSIMPredictionTrainer
     /// <param name="epoch"></param>
     private static void UpdateAdamWeights(Adam adam, SubModel model, DenseMatrix[] gradients, DenseVector[] bias_gradients, double l2_coeff, int epoch)
     {
-        for (int l = 0; l < model.Weights.Length; l++)
+        for(var l = 0; l < model.Weights.Length; l++)
         {
             //Update first moment
-            adam.Moment1[l] = adam.Decay.Beta1 * adam.Moment1[l] + (1 - adam.Decay.Beta1) * gradients[l];
-            adam.Bias1[l] = adam.Decay.Beta1 * adam.Bias1[l] + (1 - adam.Decay.Beta1) * bias_gradients[l];
+            adam.Moment1[l] = (adam.Decay.Beta1 * adam.Moment1[l]) + ((1 - adam.Decay.Beta1) * gradients[l]);
+            adam.Bias1[l] = (adam.Decay.Beta1 * adam.Bias1[l]) + ((1 - adam.Decay.Beta1) * bias_gradients[l]);
 
             //Update second moment
-            adam.Moment2[l] = (DenseMatrix)(adam.Decay.Beta2 * adam.Moment2[l] + (1 - adam.Decay.Beta2) * gradients[l].PointwiseMultiply(gradients[l]));
-            adam.Bias2[l] = (DenseVector)(adam.Decay.Beta2 * adam.Bias2[l] + (1 - adam.Decay.Beta2) * bias_gradients[l].PointwiseMultiply(bias_gradients[l]));
+            adam.Moment2[l] = (DenseMatrix)((adam.Decay.Beta2 * adam.Moment2[l]) + ((1 - adam.Decay.Beta2) * gradients[l].PointwiseMultiply(gradients[l])));
+            adam.Bias2[l] = (DenseVector)((adam.Decay.Beta2 * adam.Bias2[l]) + ((1 - adam.Decay.Beta2) * bias_gradients[l].PointwiseMultiply(bias_gradients[l])));
 
             //Compute bias-corrected first moment
-            var moment1_corrected = adam.Moment1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
-            var bias1_corrected = adam.Bias1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
+            MathNet.Numerics.LinearAlgebra.Matrix<double> moment1_corrected = adam.Moment1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
+            DenseVector bias1_corrected = adam.Bias1[l] / (1 - Math.Pow(adam.Decay.Beta1, epoch + 1));
 
             //Compute bias-corrected second moment
-            var moment2_corrected = adam.Moment2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
-            var bias2_corrected = adam.Bias2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
+            MathNet.Numerics.LinearAlgebra.Matrix<double> moment2_corrected = adam.Moment2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
+            DenseVector bias2_corrected = adam.Bias2[l] / (1 - Math.Pow(adam.Decay.Beta2, epoch + 1));
 
-            var adam_learning_rate = moment1_corrected.PointwiseDivide(moment2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
-            var adam_bias_learning_rate = bias1_corrected.PointwiseDivide(bias2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
+            MathNet.Numerics.LinearAlgebra.Matrix<double> adam_learning_rate = moment1_corrected.PointwiseDivide(moment2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
+            MathNet.Numerics.LinearAlgebra.Vector<double> adam_bias_learning_rate = bias1_corrected.PointwiseDivide(bias2_corrected.Map(m => Math.Sqrt(m) + ADAM_EPS));
 
             //L2 Regularization
             adam_learning_rate += l2_coeff * model.Weights[l];
@@ -488,7 +492,7 @@ public static class SSIMPredictionTrainer
             Bias2 = new DenseVector[model.Weights.Length];
 
             //Init all values to 0
-            for (int i = 0; i < model.Weights.Length; i++)
+            for(var i = 0; i < model.Weights.Length; i++)
             {
                 Moment1[i] = new DenseMatrix(model.Weights[i].RowCount, model.Weights[i].ColumnCount);
                 Moment2[i] = new DenseMatrix(model.Weights[i].RowCount, model.Weights[i].ColumnCount);
@@ -525,7 +529,7 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
         //Write number of glyphs
         ms.Write(BitConverter.GetBytes(Glyphs.Length));
 
-        for(int g = 0; g < Glyphs.Length; g++)
+        for(var g = 0; g < Glyphs.Length; g++)
         {
             var glyph_bytes = Encoding.UTF8.GetBytes(Glyphs[g]);
 
@@ -536,9 +540,9 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
             ms.Write(glyph_bytes);
         }
 
-        for (int g = 0; g < Glyphs.Length; g++)
+        for(var g = 0; g < Glyphs.Length; g++)
         {
-            var submodel = GlyphModels[Glyphs[g]];
+            SubModel submodel = GlyphModels[Glyphs[g]];
             var subbytes = submodel.EncodeBytes();
             ms.Write(subbytes);
         }
@@ -556,13 +560,13 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
         List<string> glyphs = [];
         Dictionary<string, SubModel> glyph_models = [];
 
-        int offset = 0;
+        var offset = 0;
 
         //Read number of glyphs
         var glyphs_count = BitConverter.ToInt32(bytes, offset);
         offset += sizeof(int);
 
-        for(int g = 0; g < glyphs_count; g++)
+        for(var g = 0; g < glyphs_count; g++)
         {
             //Get length of glyph
             var glyph_length = BitConverter.ToInt32(bytes, offset);
@@ -575,7 +579,7 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
             glyphs.Add(glyph);
         }
 
-        for(int g = 0; g < glyphs_count; g++)
+        for(var g = 0; g < glyphs_count; g++)
         {
             var submodel = SubModel.DecodeBytes(bytes, ref offset);
             glyph_models[submodel.Glyph] = submodel;
@@ -584,14 +588,14 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
         return new()
         {
             GlyphModels = glyph_models,
-            Glyphs = [..glyphs]
+            Glyphs = [.. glyphs]
         };
     }
 
     public SSIMPredictionModel Clone() => new()
     {
         GlyphModels = GlyphModels.ToDictionary(g => g.Key, g => g.Value.Clone()),
-        Glyphs = [..Glyphs]
+        Glyphs = [.. Glyphs]
     };
 
     public class SubModel
@@ -626,29 +630,29 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
             Biases = new DenseVector[1 + init.HiddenLayerCount];
 
             //Initialize weights
-            for (int w = 0; w < Weights.Length; w++)
+            for(var w = 0; w < Weights.Length; w++)
             {
-                uint next_activations_count = w == Weights.Length - 1
+                var next_activations_count = w == Weights.Length - 1
                     ? 1
                     : init.HiddenLayerNeuronCount;
 
-                uint neuron_count = w == 0
+                var neuron_count = w == 0
                     ? init.FeatureCount
                     : init.HiddenLayerNeuronCount;
 
-                double[,] layer = new double[next_activations_count, neuron_count];
+                var layer = new double[next_activations_count, neuron_count];
                 SSIMPredictionTrainer.InitializeWeightsHeNormal(layer);
                 Weights[w] = DenseMatrix.OfArray(layer);
             }
 
             //Initialize biases
-            for (int b = 0; b < Biases.Length; b++)
+            for(var b = 0; b < Biases.Length; b++)
             {
-                uint next_activations_count = b == Biases.Length - 1
+                var next_activations_count = b == Biases.Length - 1
                     ? 1
                     : init.HiddenLayerNeuronCount;
 
-                double[] layer = new double[next_activations_count];
+                var layer = new double[next_activations_count];
                 SSIMPredictionTrainer.InitializeWeightsHeNormal(layer);
                 Biases[b] = DenseVector.OfArray(layer);
             }
@@ -675,7 +679,7 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
             //Write number of layers
             ms.Write(BitConverter.GetBytes(Weights.Length));
 
-            for (int w = 0; w < Weights.Length; w++)
+            for(var w = 0; w < Weights.Length; w++)
             {
                 DenseMatrix weights = Weights[w];
                 DenseVector biases = Biases[w];
@@ -685,16 +689,16 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
                 ms.Write(BitConverter.GetBytes(weights.ColumnCount));
 
                 //Write weights
-                for (int i = 0; i < weights.RowCount; i++)
+                for(var i = 0; i < weights.RowCount; i++)
                 {
-                    for (int j = 0; j < weights.ColumnCount; j++)
+                    for(var j = 0; j < weights.ColumnCount; j++)
                     {
                         ms.Write(BitConverter.GetBytes(weights[i, j]));
                     }
                 }
 
                 //Write biases
-                for (int i = 0; i < biases.Count; i++)
+                for(var i = 0; i < biases.Count; i++)
                 {
                     ms.Write(BitConverter.GetBytes(biases[i]));
                 }
@@ -724,26 +728,26 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
             offset += sizeof(double);
 
             //Get number of layers
-            int layers = BitConverter.ToInt32(bytes, offset);
+            var layers = BitConverter.ToInt32(bytes, offset);
             offset += sizeof(int);
 
-            DenseMatrix[] weights = new DenseMatrix[layers];
-            DenseVector[] biases = new DenseVector[layers];
+            var weights = new DenseMatrix[layers];
+            var biases = new DenseVector[layers];
 
-            for (int l = 0; l < layers; l++)
+            for(var l = 0; l < layers; l++)
             {
                 //Get dimensions of layer
-                int m = BitConverter.ToInt32(bytes, offset);
+                var m = BitConverter.ToInt32(bytes, offset);
                 offset += sizeof(int);
-                int n = BitConverter.ToInt32(bytes, offset);
+                var n = BitConverter.ToInt32(bytes, offset);
                 offset += sizeof(int);
 
-                double[,] layer = new double[m, n];
+                var layer = new double[m, n];
 
                 //Read in weights for layer
-                for (int i = 0; i < m; i++)
+                for(var i = 0; i < m; i++)
                 {
-                    for (int j = 0; j < n; j++)
+                    for(var j = 0; j < n; j++)
                     {
                         layer[i, j] = BitConverter.ToDouble(bytes, offset);
                         offset += sizeof(double);
@@ -752,10 +756,10 @@ public class SSIMPredictionModel(SSIMPredictionModelInitParams init)
 
                 weights[l] = DenseMatrix.OfArray(layer);
 
-                double[] bias = new double[m];
+                var bias = new double[m];
 
                 //Read in biases for layer
-                for (int i = 0; i < m; i++)
+                for(var i = 0; i < m; i++)
                 {
                     bias[i] = BitConverter.ToDouble(bytes, offset);
                     offset += sizeof(double);
@@ -835,10 +839,7 @@ public class SSIMPredictionInput
             var mean = Intensities.Mean();
             var std_dev = Intensities.StandardDeviation();
 
-            if (std_dev == 0 || double.IsNaN(mean) || double.IsNaN(std_dev))
-                return Intensities;
-
-            return [.. Intensities.Select(s => (s - mean) / std_dev)];
+            return std_dev == 0 || double.IsNaN(mean) || double.IsNaN(std_dev) ? Intensities : ([.. Intensities.Select(s => (s - mean) / std_dev)]);
         }
     }
 

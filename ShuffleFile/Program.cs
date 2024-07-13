@@ -1,19 +1,19 @@
 ﻿const long LIMIT = 100_000;
 
-string path = args[0];
-string output = args[1];
+var path = args[0];
+var output = args[1];
 
-var files = (Directory.Exists(path)
+IEnumerator<string> files = (Directory.Exists(path)
     ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
     : File.Exists(path)
     ? [path]
     : []).GetEnumerator();
 
-var dir = Directory.CreateTempSubdirectory();
+DirectoryInfo dir = Directory.CreateTempSubdirectory();
 
 try
 {
-    for(int i = 0; files.MoveNext();)
+    for(var i = 0; files.MoveNext();)
     {
         var file = files.Current;
 
@@ -33,16 +33,20 @@ try
             {
                 var line = sr.ReadLine();
                 if(!string.IsNullOrEmpty(line))
+                {
                     lines.Add(line);
+                }
 
-                if (sr.EndOfStream)
+                if(sr.EndOfStream)
+                {
                     break;
+                }
             }
 
             //Shuffle lines and write to file
             using var os = new FileStream(Path.Combine(dir.FullName, $"{i}.txt"), FileMode.OpenOrCreate, FileAccess.Write);
             using var sw = new StreamWriter(os);
-            
+
             foreach(var line in lines.Select(l => (l, Random.Shared.Next()))
                 .OrderBy(l => l.Item2)
                 .Select(l => l.l))
@@ -78,7 +82,7 @@ try
         while(eligible.Count > 0)
         {
             //Get random stream
-            var next = eligible[Random.Shared.Next(eligible.Count)];
+            StreamReader next = eligible[Random.Shared.Next(eligible.Count)];
 
             //Read line from stream
             var line = next.ReadLine();
@@ -93,11 +97,11 @@ try
     }
     finally
     {
-        foreach ((var fs, var sr) in streams)
+        foreach((FileStream? fs, StreamReader? sr) in streams)
         {
             fs.Dispose();
             sr.Dispose();
-        }    
+        }
     }
 
     Console.WriteLine("Done.");

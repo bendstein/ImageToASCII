@@ -5,29 +5,29 @@ using RandomImageGenerator;
 Dictionary<string, string> argd = [];
 System.Collections.IEnumerator arge = args.GetEnumerator();
 
-while (arge.MoveNext())
+while(arge.MoveNext())
 {
-    string? current = arge.Current.ToString();
+    var current = arge.Current.ToString();
 
-    if (!string.IsNullOrWhiteSpace(current))
+    if(!string.IsNullOrWhiteSpace(current))
     {
         //First param is base url
-        if (argd.Count == 0)
+        if(argd.Count == 0)
         {
             argd["--url"] = current;
             continue;
         }
 
-        if (current.StartsWith("--"))
+        if(current.StartsWith("--"))
         {
-            string? next = string.Empty;
+            var next = string.Empty;
 
-            if (arge.MoveNext())
+            if(arge.MoveNext())
             {
                 next = arge.Current.ToString();
             }
 
-            if (!string.IsNullOrEmpty(next))
+            if(!string.IsNullOrEmpty(next))
             {
                 argd[current.ToLower()] = next;
             }
@@ -39,7 +39,7 @@ PromptGenerator prompt_generator = JObject.Parse(await File.ReadAllTextAsync("pr
     .ToObject<PromptGenerator>()
     ?? throw new Exception("Failed to serialize prompts.json as prompt generator");
 
-int n = (argd.TryGetValue("--n", out string? ns) && int.TryParse(ns, out int ni)) ? ni : 1;
+var n = (argd.TryGetValue("--n", out var ns) && int.TryParse(ns, out var ni)) ? ni : 1;
 
 using HttpClient http_client = new();
 FooocusClient client = new(argd["--url"], http_client)
@@ -68,41 +68,41 @@ default_styles = all_styles.Select(s => (s, Random.Shared.NextDouble()))
     .Select(s => s.s)
     .ToArray();
 
-string out_dir = $"out/{DateTime.Now:MM-dd-yyyy-HH-mm}";
-if (!Directory.Exists(out_dir))
+var out_dir = $"out/{DateTime.Now:MM-dd-yyyy-HH-mm}";
+if(!Directory.Exists(out_dir))
 {
     _ = Directory.CreateDirectory(out_dir);
 }
 
 //Generate n images
-for (int i = 0; i < n; i++)
+for(var i = 0; i < n; i++)
 {
-    (string prompt, string model, string[] styles) = prompt_generator.GeneratePrompt(Random.Shared);
+    (var prompt, var model, var styles) = prompt_generator.GeneratePrompt(Random.Shared);
     Console.WriteLine($"Prompt {i + 1}: {prompt}");
 
     IEnumerable<Response6> response = await client.TextToImageWithIpAsync(new Anonymous6(), "application/json", new()
     {
         Prompt = prompt,
-        Style_selections = styles.Length == 0? default_styles : styles,
+        Style_selections = styles.Length == 0 ? default_styles : styles,
         Performance_selection = PerformanceSelection.Speed,
         Aspect_ratios_selection = "896*1152",
         Image_number = 1,
         Image_seed = -1,
         Guidance_scale = 4,
         Sharpness = 2,
-        Base_model_name = string.IsNullOrWhiteSpace(model)? default_model : model,
+        Base_model_name = string.IsNullOrWhiteSpace(model) ? default_model : model,
         Refiner_model_name = "None",
         Refiner_switch = 0.5d,
         Loras = [],
     });
 
-    int m = 0;
+    var m = 0;
 
-    foreach (Response6? item in response)
+    foreach(Response6? item in response)
     {
-        string? url = item.AdditionalProperties.TryGetValue("url", out object? u) ? u.ToString() : string.Empty;
+        var url = item.AdditionalProperties.TryGetValue("url", out var u) ? u.ToString() : string.Empty;
 
-        if (!string.IsNullOrWhiteSpace(url))
+        if(!string.IsNullOrWhiteSpace(url))
         {
             using HttpClient http = new();
             HttpResponseMessage resp = await http.SendAsync(new()
@@ -111,7 +111,7 @@ for (int i = 0; i < n; i++)
                 Method = HttpMethod.Get
             });
 
-            if (resp.IsSuccessStatusCode)
+            if(resp.IsSuccessStatusCode)
             {
                 await using FileStream fs = new(Path.Combine(out_dir, $"image_{i}_{m}.png"), FileMode.CreateNew, FileAccess.ReadWrite);
                 await using Stream body_stream = await resp.Content.ReadAsStreamAsync();

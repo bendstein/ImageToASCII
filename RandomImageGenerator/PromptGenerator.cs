@@ -9,18 +9,18 @@ public class PromptGenerator
 
     public (string prompt, string model, string[] style) GeneratePrompt(Random random)
     {
-        if (Templates.Length == 0)
+        if(Templates.Length == 0)
         {
             return (string.Empty, string.Empty, []);
         }
 
         Template template = Templates[random.Next(Templates.Length)];
 
-        string[] arguments = template.Args.Select(arg_type =>
+        var arguments = template.Args.Select(arg_type =>
         {
-            if (Args.TryGetValue(arg_type, out string[]? arg_values))
+            if(Args.TryGetValue(arg_type, out var arg_values))
             {
-                if (arg_values.Length > 0)
+                if(arg_values.Length > 0)
                 {
                     return arg_values[random.Next(arg_values.Length)];
                 }
