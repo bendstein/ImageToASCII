@@ -163,21 +163,13 @@ public class SSIMConverter : IImageToASCIIConverter
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
 
-        //Augment dataset by rotating the image
-        for(var degrees = 0; degrees < 360; degrees += 30)
+        foreach(var augmented_image in AugmentImage(image))
         {
-            IMagickImage<ushort> rotated = image.Clone();
-
-            if(degrees > 0)
-            {
-                rotated.Rotate(degrees);
-            }
-
             //Break images into windows
-            PixelImage pixel_image = new(rotated);
+            PixelImage pixel_image = new(augmented_image);
 
-            var width = (int)Math.Ceiling((double)rotated.Width / options.FontSize);
-            var height = (int)Math.Ceiling((double)rotated.Height / options.FontSize);
+            var width = (int)Math.Ceiling((double)augmented_image.Width / options.FontSize);
+            var height = (int)Math.Ceiling((double)augmented_image.Height / options.FontSize);
 
             IEnumerator<PixelImage> tiles = pixel_image.Tiles(options.FontSize, options.FontSize).GetEnumerator();
 
@@ -273,6 +265,57 @@ public class SSIMConverter : IImageToASCIIConverter
             }
 
             WriteLine();
+        }
+
+        yield break;
+    }
+
+    private static IEnumerable<IMagickImage<ushort>> AugmentImage(IMagickImage<ushort> image)
+    {
+        for(int angle = 0; angle < 180; angle += 30)
+        {
+            for(double scale = 0.5d; scale <= 1.5d; scale += 0.5d)
+            {
+                for(int noise = 0; noise < 2; noise++)
+                {
+                    for(int flip = 0; flip < 2; flip++)
+                    {
+                        for(int flop = 0; flop < 2; flop++)
+                        {
+                            for(int negate = 0; negate < 2; negate++)
+                            {
+                                using var clone = image.Clone();
+
+                                //Rotate image
+                                if(angle > 0)
+                                    clone.Rotate(angle);
+
+                                //Scale image
+                                if(scale != 1d)
+                                    clone.Scale(new Percentage(scale * 100d));
+
+                                //Add gaussian noise
+                                if(noise == 1)
+                                    clone.AddNoise(NoiseType.Gaussian);
+
+                                //Flip vertically
+                                if(flip == 1)
+                                    clone.Flip();
+
+                                //Flip horizontally
+                                if(flop == 1)
+                                    clone.Flop();
+
+                                //Invert greyscale channel
+                                if(negate == 1)
+                                    clone.Negate(Channels.Gray);
+
+                                yield return clone;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         yield break;
