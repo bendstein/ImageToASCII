@@ -26,26 +26,14 @@ public class App : AsyncCommand<AppSettings>
         CancellationTokenSource cts = new();
         CancellationToken token = cts.Token;
 
-        if(!Directory.Exists("log"))
-        {
-            _ = Directory.CreateDirectory("log");
-        }
-
         var log_console = true;
-
-        using FileStream log_stream = new($"log/{DateTime.Now:MM-dd-yyyy-HH-mm-ss-ffff}.log", FileMode.OpenOrCreate, FileAccess.Write);
-        using StreamWriter log_writer = new(log_stream);
 
         void Log(string message, bool is_error = false)
         {
             var full_message = $"{DateTime.Now:HH:mm:ss.ffff} {(is_error ? "ERROR | " : "INFO  | ")} {message}";
 
             if(log_console)
-            {
                 Console.WriteLine(full_message);
-            }
-
-            //log_writer.WriteLine(full_message);
         }
 
         void WriteGlyph(string glyph, uint? color = null)
@@ -444,6 +432,7 @@ public class App : AsyncCommand<AppSettings>
             }
             catch(Exception e) when(e is not OperationCanceledException)
             {
+                log_console = true;
                 Log(e.ToString(), true);
                 throw;
             }
