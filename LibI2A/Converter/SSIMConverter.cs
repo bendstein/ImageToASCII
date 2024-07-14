@@ -29,7 +29,7 @@ public class SSIMConverter : IImageToASCIIConverter
         using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
-        Utils.PrepareImage(image);
+        Utils.PrepareImage(image, options.TraceEdges);
 
         //Break images into windows
         PixelImage pixel_image = new(image);
@@ -163,7 +163,7 @@ public class SSIMConverter : IImageToASCIIConverter
         using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
-        Utils.PrepareImage(image);
+        Utils.PrepareImage(image, options.TraceEdges);
 
         foreach(var augmented_image in AugmentImage(image))
         {
@@ -307,6 +307,11 @@ public class SSIMConverter : IImageToASCIIConverter
         public int FontSize { get; set; } = 12;
 
         public int ParallelCalculate { get; set; } = 1;
+
+        /// <summary>
+        /// If true, will places emphasis on edges
+        /// </summary>
+        public bool TraceEdges { get; set; } = true;
 
         public Dictionary<string, string[]> GlyphClasses { get; set; } = [];
     }

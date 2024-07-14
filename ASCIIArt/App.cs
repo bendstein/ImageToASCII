@@ -8,20 +8,13 @@ using Spectre.Console.Cli;
 namespace I2A;
 public class App : AsyncCommand<AppSettings>
 {
-    private const string
-        LAYOUT_ROOT = "Root",
-        LAYOUT_LOG = "Log",
-        LAYOUT_CANVAS = "Canvas",
-        LAYOUT_TRAINING = "Training";
-
     private const int
-        LIVE_UPDATE = 250,
         PREPROCESS_PRECISION = 8;
 
     private const double
         CREATE_GLYPH_CLASSES_CONFIDENCE = 0.90d;
 
-    public override async Task<int> ExecuteAsync(CommandContext context, AppSettings settings)
+    public override async Task<int> ExecuteAsync(CommandContext context, AppSettings settings)  
     {
         CancellationTokenSource cts = new();
         CancellationToken token = cts.Token;
@@ -129,6 +122,7 @@ public class App : AsyncCommand<AppSettings>
                         {
                             opts.FontSize = settings.TileSize;
                             opts.ParallelCalculate = settings.Threads;
+                            opts.TraceEdges = !settings.DisableEdgeTracing;
                             opts.GlyphClasses = glyphs;
                         });
 
@@ -224,6 +218,7 @@ public class App : AsyncCommand<AppSettings>
                             {
                                 opts.FontSize = settings.TileSize;
                                 opts.ParallelCalculate = settings.Threads;
+                                opts.TraceEdges = !settings.DisableEdgeTracing;
                                 opts.GlyphClasses = glyphs;
                             });
 
@@ -392,6 +387,7 @@ public class App : AsyncCommand<AppSettings>
                                 {
                                     opts.FontSize = settings.TileSize;
                                     opts.InvertFont = settings.InvertFont;
+                                    opts.TraceEdges = !settings.DisableEdgeTracing;
                                 });
                             }
                             break;
@@ -411,6 +407,7 @@ public class App : AsyncCommand<AppSettings>
                                 {
                                     opts.FontSize = settings.TileSize;
                                     opts.ParallelCalculate = settings.Threads;
+                                    opts.TraceEdges = !settings.DisableEdgeTracing;
                                     opts.GlyphClasses = glyphs;
                                 });
                             }

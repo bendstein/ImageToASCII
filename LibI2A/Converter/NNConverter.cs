@@ -86,7 +86,7 @@ public class NNConverter : IImageToASCIIConverter
         using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
-        Utils.PrepareImage(image);
+        Utils.PrepareImage(image, options.TraceEdges);
 
         //Break images into windows
         PixelImage pixel_image = new(image);
@@ -1018,6 +1018,11 @@ public class NNConverter : IImageToASCIIConverter
         /// The tile/font size to use
         /// </summary>
         public int FontSize { get; set; } = 16;
+
+        /// <summary>
+        /// If true, will places emphasis on edges
+        /// </summary>
+        public bool TraceEdges { get; set; } = true;
 
         /// <summary>
         /// Glyphs that are equivalent for the purposes of SSIM

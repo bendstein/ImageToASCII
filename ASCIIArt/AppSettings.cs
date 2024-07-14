@@ -115,6 +115,11 @@ public class AppSettings : CommandSettings
     [Description("Shuffle preprocessed input.")]
     public bool Shuffle { get; set; } = false;
 
+    [CommandOption("--disable-edge-tracing")]
+    [DefaultValue(false)]
+    [Description("If true, will not trace image edges.")]
+    public bool DisableEdgeTracing { get; set; } = false;
+
     [CommandOption("--learning-rate")]
     [DefaultValue(0.01d)]
     [Description("The rate at which the model learns.")]

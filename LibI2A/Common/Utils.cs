@@ -229,13 +229,16 @@ public static class Utils
     /// Apply any transformations to the image before conversion
     /// </summary>
     /// <param name="image"></param>
-    public static void PrepareImage(IMagickImage<ushort> image)
+    public static void PrepareImage(IMagickImage<ushort> image, bool trace)
     {
         //Get the edges of the image and composite it with the original to enhance edges
-        using var edge_image = image.Clone();
-        edge_image.Edge(2d);
-        edge_image.Negate();
-        edge_image.ColorType = ColorType.Grayscale;
-        image.Composite(edge_image, CompositeOperator.Multiply);
+        if(trace)
+        {
+            using var edge_image = image.Clone();
+            edge_image.Edge(2d);
+            edge_image.Negate();
+            edge_image.ColorType = ColorType.Grayscale;
+            image.Composite(edge_image, CompositeOperator.Multiply);
+        }
     }
 }
