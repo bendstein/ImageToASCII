@@ -86,6 +86,7 @@ public class NNConverter : IImageToASCIIConverter
         using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
+        Utils.PrepareImage(image);
 
         //Break images into windows
         PixelImage pixel_image = new(image);
