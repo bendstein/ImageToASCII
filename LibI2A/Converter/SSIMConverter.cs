@@ -29,6 +29,7 @@ public class SSIMConverter : IImageToASCIIConverter
         using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
+        Utils.PrepareImage(image);
 
         //Break images into windows
         PixelImage pixel_image = new(image);
@@ -162,6 +163,7 @@ public class SSIMConverter : IImageToASCIIConverter
         using MagickImageCollection image_collection = new(input);
         image_collection.Coalesce();
         IMagickImage<ushort> image = image_collection.First();
+        Utils.PrepareImage(image);
 
         foreach(var augmented_image in AugmentImage(image))
         {

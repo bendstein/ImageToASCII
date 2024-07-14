@@ -2,7 +2,7 @@
   "profiles": {
     "I2A": {
       "commandName": "Project",
-      "commandLineArgs": "--mode train --threads 32 --model C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\model\\model.nn --learning-rate 0.01 --adam 0.99,0.999 --alpha 0.001 --lambda 0.01 --batch-size 256 --preprocess C:\\Users\\benjo\\Documents\\repos\\C#\\ImageToASCII\\preprocessed\\shuffled.txt"
+      "commandLineArgs": "\"C:\\Games\\Livid\\Real\\pic\\s\\f\\kz (1).jpg\" --threads 8 --no-color"
     }
   }
 }
