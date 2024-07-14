@@ -274,48 +274,27 @@ public class SSIMConverter : IImageToASCIIConverter
 
     private static IEnumerable<IMagickImage<ushort>> AugmentImage(IMagickImage<ushort> image)
     {
-        for(int angle = 0; angle < 180; angle += 30)
+        for(int angle = 0; angle < 180; angle += 45)
         {
             for(double scale = 0.5d; scale <= 1.5d; scale += 0.5d)
             {
-                for(int noise = 0; noise < 2; noise++)
+                for (int negate = 0; negate < 2; negate++)
                 {
-                    for(int flip = 0; flip < 2; flip++)
-                    {
-                        for(int flop = 0; flop < 2; flop++)
-                        {
-                            for(int negate = 0; negate < 2; negate++)
-                            {
-                                using var clone = image.Clone();
+                    using var clone = image.Clone();
 
-                                //Rotate image
-                                if(angle > 0)
-                                    clone.Rotate(angle);
+                    //Rotate image
+                    if (angle > 0)
+                        clone.Rotate(angle);
 
-                                //Scale image
-                                if(scale != 1d)
-                                    clone.Scale(new Percentage(scale * 100d));
+                    //Scale image
+                    if (scale != 1d)
+                        clone.Scale(new Percentage(scale * 100d));
 
-                                //Add gaussian noise
-                                if(noise == 1)
-                                    clone.AddNoise(NoiseType.Gaussian);
+                    //Invert greyscale channel
+                    if (negate == 1)
+                        clone.Negate();
 
-                                //Flip vertically
-                                if(flip == 1)
-                                    clone.Flip();
-
-                                //Flip horizontally
-                                if(flop == 1)
-                                    clone.Flop();
-
-                                //Invert greyscale channel
-                                if(negate == 1)
-                                    clone.Negate(Channels.Gray);
-
-                                yield return clone;
-                            }
-                        }
-                    }
+                    yield return clone;
                 }
             }
         }
